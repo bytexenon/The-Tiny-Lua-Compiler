@@ -70,17 +70,6 @@
 
 --]]
 
---[[
-    ============================================================================
-              (◕‿◕✿) The Magical Helpers That Make Everything Possible!
-    ============================================================================
-
-    Every decent compiler needs its trusty toolkit; little functions that handle
-    the foundational heavy lifting and the boring stuff so our main code can stay clean!
-    These are like the Swiss Army knife in our compiler's backpack. Let's meet
-    our magical helpers:
---]]
-
 -- Converts lists into lightning-fast lookup dictionaries (or 'sets').
 -- WHY? When you need to quickly check if an item is present in a collection
 -- (like checking if a word is a keyword), iterating over a simple list is slow
@@ -89,7 +78,7 @@
 local function createLookupTable(list)
   local lookup = {}
   for _, value in ipairs(list) do
-    lookup[value] = true -- ◟( ˘•ω•˘ )◞ Setting up VIP entries for lightning lookups
+    lookup[value] = true
   end
   return lookup
 end
@@ -134,7 +123,7 @@ local function makePatternLookup(pattern)
     local char = string.char(code)
     -- Does this character match our secret pattern?
     if char:match(pattern) then
-      lookup[char] = true -- Yes! This character is part of the club! ヽ(´▽`)/
+      lookup[char] = true
     end
   end
 
@@ -1716,7 +1705,7 @@ function Parser:parsePrimaryExpression()
     self:consume(1)
     return {
       TYPE         = "Variable",
-      Value        = tokenValue,
+      Name         = tokenValue,
       VariableType = variableType
     }
 
@@ -2102,7 +2091,7 @@ function Parser:parseFunction()
   local variableType = self:getVariableType(variableName)
   local expression = {
     TYPE         = "Variable",
-    Value        = variableName,
+    Name         = variableName,
     VariableType = variableType
   }
 
@@ -2788,14 +2777,14 @@ function CodeGenerator:compileVariableNode(node, expressionRegister)
   local variableType = node.VariableType
   if variableType == "Global" then
     -- OP_GETGLOBAL [A, Bx]    R(A) := Gbl[Kst(Bx)]
-    self:emitInstruction("GETGLOBAL", expressionRegister, self:findOrCreateConstant(node.Value))
+    self:emitInstruction("GETGLOBAL", expressionRegister, self:findOrCreateConstant(node.Name))
   elseif variableType == "Local" then
-    local variableRegister = self:findVariableRegister(node.Value)
+    local variableRegister = self:findVariableRegister(node.Name)
     -- OP_MOVE [A, B]    R(A) := R(B)
     self:emitInstruction("MOVE", expressionRegister, variableRegister)
   elseif variableType == "Upvalue" then
     -- OP_GETUPVAL [A, B]    R(A) := UpValue[B]
-    self:emitInstruction("GETUPVAL", expressionRegister, self:findOrCreateUpvalue(node.Value))
+    self:emitInstruction("GETUPVAL", expressionRegister, self:findOrCreateUpvalue(node.Name))
   end
 
   return expressionRegister
@@ -3099,7 +3088,7 @@ function CodeGenerator:compileVariableAssignmentNode(node)
     local lvalueType = lvalue.TYPE
     if lvalueType == "Variable" then
       local variableType = lvalue.VariableType
-      local variableName = lvalue.Value
+      local variableName = lvalue.Name
       local expressionRegister = expressionRegisters[index]
       if not expressionRegister then error("Expected an expression for assignment") end
       if variableType == "Local" then
