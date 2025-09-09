@@ -3480,7 +3480,12 @@ end
 
 function Compiler:makeInstruction(instruction)
   -- First, let's look up the opcode's number and its argument format.
-  local opcodeTable = COMPILER_OPCODE_LOOKUP[instruction[1]]
+  local instructionName = instruction[1]
+  local opcodeTable     = COMPILER_OPCODE_LOOKUP[instruction[1]]
+  if not opcodeTable or not instructionName then
+    error("Compiler: Unsupported instruction '" .. tostring(instructionName) .. "'")
+  end
+
   local opcode, opmode = opcodeTable[1], opcodeTable[2]
 
   -- We build the 32-bit number by shifting each component to its designated
@@ -3523,7 +3528,7 @@ function Compiler:makeInstruction(instruction)
     return self:makeFourBytes(opcode + a + sbx)
   end
 
-  error("Compiler: Unsupported instruction format for opcode '" .. tostring(opcode) .. "'")
+  error("Compiler: Unsupported instruction format for '" .. tostring(instructionName) .. "'")
 end
 
 --[[
@@ -3578,9 +3583,9 @@ end
     | Is Vararg Flag              | 1 (byte, 0 or 2)                        |
     | Max Stack Size              | 1 (byte)                                |
     +-----------------------------+-----------------------------------------+
-    | Code Section                | <See _makeCodeSection>                  |
+    | Code Section                | <See makeCodeSection>                   |
     +-----------------------------+-----------------------------------------+
-    | Constant Section            | <See _makeConstantSection>              |
+    | Constant Section            | <See makeConstantSection>               |
     +-----------------------------+-----------------------------------------+
     | Debug Info (Line Numbers)   | Size=0 (4 bytes) + No Data              |
     | Debug Info (Local Vars)     | Size=0 (4 bytes) + No Data              |
