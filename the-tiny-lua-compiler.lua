@@ -3005,7 +3005,8 @@ end
 function CodeGenerator:compileRepeatLoopNode(node)
   local loopStart = #self.currentProto.code
   self.breakInstructions = {}
-  self:processCodeBlock(node.CodeBlock)
+  self:enterScope()
+  self:processCodeBlockInCurrentScope(node.CodeBlock)
   local conditionRegister = self:processExpressionNode(node.Condition)
   -- OP_TEST [A, C]    if not (R(A) <=> C) then pc++
   self:emitInstruction("TEST", conditionRegister, 0, 0)
@@ -3013,6 +3014,7 @@ function CodeGenerator:compileRepeatLoopNode(node)
   self:emitInstruction("JMP", 0, loopStart - #self.currentProto.code - 1)
   self:updateJumpInstructions(self.breakInstructions)
   self:deallocateRegister(conditionRegister)
+  self:exitScope()
 end
 
 function CodeGenerator:compileDoBlockNode(node)
@@ -3151,6 +3153,12 @@ function CodeGenerator:processExpressionList(expressionList)
   end
 
   return registers
+end
+
+function CodeGenerator:processCodeBlockInCurrentScope(list)
+  for _, node in ipairs(list) do
+    self:processStatementNode(node)
+  end
 end
 
 function CodeGenerator:processCodeBlock(list)
