@@ -70,16 +70,16 @@ local source = [[
 -- internal steps changing in future versions of TLC.
 
 -- Tokenize: Raw text -> Stream of tokens
-local tokens    = tlc.Tokenizer.new(source):tokenize()
+local tokens   = tlc.Tokenizer.new(source):tokenize()
 
 -- Parse: Stream of tokens -> Abstract Syntax Tree (AST)
-local ast       = tlc.Parser.new(tokens):parse()
+local ast      = tlc.Parser.new(tokens):parse()
 
 -- Generate Code: AST -> Function Prototype (Intermediate Representation)
-local proto     = tlc.CodeGenerator.new(ast):generate()
+local proto    = tlc.CodeGenerator.new(ast):generate()
 
 -- Compile: Function Prototype -> Final Lua Bytecode String
-local bytecode  = tlc.Compiler.new(proto):compile()
+local bytecode = tlc.Compiler.new(proto):compile()
 
 -- 3. Execution
 -- ------------
@@ -110,6 +110,44 @@ Run the test suite with:
 ```bash
 lua tests/test.lua
 ```
+
+### AST Node Specifications
+
+#### **Literals & Identifiers**
+*   `{ TYPE = "StringLiteral", Value = <string> }`
+*   `{ TYPE = "NumericLiteral", Value = <number> }`
+*   `{ TYPE = "BooleanLiteral", Value = <bool> }`
+*   `{ TYPE = "NilLiteral" }`
+*   `{ TYPE = "VarargExpression" }`
+
+#### **Expressions**
+*   `{ TYPE = "FunctionExpression", Body = <Block>, Parameters = <list_of_strings>, IsVarArg = <bool> }`
+*   `{ TYPE = "UnaryOperator", Operator = <string>, Operand = <node> }`
+*   `{ TYPE = "BinaryOperator", Operator = <string>, Left = <node>, Right = <node> }`
+*   `{ TYPE = "FunctionCall", Callee = <node>, Arguments = <list_of_nodes>, IsMethodCall = <bool> }`
+*   `{ TYPE = "IndexExpression", Base = <node>, Index = <node>, IsPrecomputed = <bool>? }`
+*   `{ TYPE = "TableConstructor", Elements = <list_of_TableElement> }`
+*   `{ TYPE = "TableElement", Key = <node>, Value = <node>, IsImplicitKey = <bool> }`
+*   `{ TYPE = "ParenthesizedExpression", Expression = <node> }`
+
+#### **Statements**
+*   `{ TYPE = "LocalDeclarationStatement", Variables = <list_of_strings>, Initializers = <list_of_nodes> }`
+*   `{ TYPE = "LocalFunctionDeclaration", Name = <string>, Body = <FunctionExpression> }`
+*   `{ TYPE = "AssignmentStatement", LValues = <list_of_nodes>, Expressions = <list_of_nodes> }`
+*   `{ TYPE = "CallStatement", Expression = <FunctionCall> }`
+*   `{ TYPE = "IfClause", Condition = <node>, Body = <Block> }`
+*   `{ TYPE = "IfStatement", Clauses = <list_of_IfClauses>, ElseClause = <Block>? }`
+*   `{ TYPE = "WhileStatement", Condition = <node>, Body = <Block> }`
+*   `{ TYPE = "RepeatStatement", Body = <Block>, Condition = <node> }`
+*   `{ TYPE = "ForNumericStatement", Variable = <Identifier>, Start = <node>, End = <node>, Step = <node>?, Body = <Block> }`
+*   `{ TYPE = "ForGenericStatement", Iterators = <list_of_strings>, Expressions = <list_of_nodes>, Body = <Block> }`
+*   `{ TYPE = "DoStatement", Body = <Block> }`
+*   `{ TYPE = "ReturnStatement", Expressions = <list_of_nodes> }`
+*   `{ TYPE = "BreakStatement" }`
+
+#### **Program Structure**
+*   `{ TYPE = "Block", Statements = <list_of_statement> }`
+*   `{ TYPE = "Program", Body = <Block> }`
 
 ### Support The Tiny Lua Compiler (TLC)
 
