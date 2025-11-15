@@ -731,42 +731,6 @@ end
                         (ﾉ◕ヮ◕)ﾉ*:･ﾟ AST FACTORY ONLINE!
     ============================================================================
 
-    This is where the magic happens! The Parser consumes the flat list of tokens
-    from the Tokenizer and builds a hierarchical Abstract Syntax Tree (AST)
-    that represents the structure and meaning of the code. Think of it as
-    transforming raw ingredients (tokens) into a fully structured cake (AST)
-    following our grammar rules as the recipe.
-
-    [BEFORE - Token Soup]
-    `local x = 10 + 20 * (3 - 4)` (as tokens with types/values)
-
-    [AFTER - AST Cake (Simplified)]
-    AST
-    └─ Block
-        └─ LocalDeclaration
-            ├─ Variables: ["x"]
-            └─ Expressions: [ -- Single expression for '10 + ...'
-                BinaryOperator {
-                    Operator: "+",
-                    Left: Number(10),
-                    Right: BinaryOperator {
-                        Operator: "*",
-                        Left: Number(20),
-                        Right: BinaryOperator {
-                            Operator: "-",
-                            Left: Number(3),
-                            Right: Number(4)
-                        }
-                    }
-                }
-            ]
-
-    General tips:
-      - The structure of the AST directly reflects the grouping dictated by
-        operator precedence and parentheses.
-      - Recursive descent is like solving math problems by breaking them
-        into smaller, self-similar problems (remember PEMDAS? That's related
-        to the precedence climbing part!).
 --]]
 
 --* Parser *--
@@ -776,7 +740,7 @@ Parser.__index = Parser -- Set up for method calls via `.`
 
 Parser.CONFIG = {
   --[[
-    Who gets solved first in an expression? This table settles all arguments!
+    Who gets solved first in an expression? This table settles all arguments.
     It defines the binding power and associativity of binary operators.
     We use this in our precedence climbing algorithm (`parseBinaryExpression`).
 
@@ -1411,7 +1375,7 @@ function Parser:parsePrimaryExpression()
     -- The "ParenthesizedExpression" node is NOT just for operator precedence.
     -- In Lua, parentheses also force a multi-return expression to adjust to
     -- a single value. e.g., `a, b = f()` is different from `a, b = (f())`.
-    -- Therefore, we MUST keep this wrapper node in the AST.
+    -- Therefore, we must keep this wrapper node in the AST.
     return { TYPE = "ParenthesizedExpression",
       Expression = expression
     }
@@ -2473,13 +2437,19 @@ end
 function CodeGenerator:processLiteral(node, register)
   local nodeType = node.TYPE
   if nodeType == "NilLiteral" then
+
+    -- OP_LOADNIL [A, B]    R(A) := ... := R(B) := nil
     self:emitInstruction("LOADNIL", register, register, 0)
   elseif nodeType == "BooleanLiteral" then
     local value = (node.Value and 1) or 0
+
+    -- OP_LOADBOOL [A, B, C]    R(A) := (Bool)B; if (C) pc++
     self:emitInstruction("LOADBOOL", register, value, 0)
   elseif nodeType == "NumericLiteral" or nodeType == "StringLiteral" then
     local value         = node.Value
     local constantIndex = self:findOrCreateConstant(value)
+
+    -- OP_LOADK [A, Bx]    R(A) = Kst(Bx)
     self:emitInstruction("LOADK", register, constantIndex, 0)
   else
     error("Compiler: Unsupported literal type: " .. tostring(nodeType))
@@ -2542,6 +2512,8 @@ function CodeGenerator:processBinaryOperator(node, register)
 
       self:emitInstruction(instruction, flag, b, c)
       self:emitInstruction("JMP", 0, 1)
+
+      -- OP_LOADBOOL [A, B, C]    R(A) := (Bool)B; if (C) pc++
       self:emitInstruction("LOADBOOL", register, 0, 1)
       self:emitInstruction("LOADBOOL", register, 1, 0)
     end)
@@ -2554,6 +2526,8 @@ function CodeGenerator:processBinaryOperator(node, register)
     -- as it would cause register allocation issues (see the comment above).
     local leftRegister  = self:processExpressionNode(left)
     local rightRegister = self:processExpressionNode(right)
+
+    -- OP_CONCAT [A, B, C]    R(A) := R(B).. ... ..R(C)
     self:emitInstruction("CONCAT", register, leftRegister, rightRegister)
     self:freeRegisters(2)
 
@@ -2585,6 +2559,8 @@ function CodeGenerator:processTableConstructor(node, register)
   -- TODO: We're doing wrong calculation, fix it later.
   local sizeB = math.min(#implicitElems, 100)
   local sizeC = math.min(#explicitElems, 100)
+
+  -- OP_NEWTABLE [A, B, C]    R(A) := {} (size = B,C)
   self:emitInstruction("NEWTABLE", register, sizeB, sizeC)
 
   for _, elem in ipairs(explicitElems) do
@@ -2592,6 +2568,8 @@ function CodeGenerator:processTableConstructor(node, register)
     -- NOTE: Do not use `withTwoTemporaryRegisters` here.
     local keyRegister   = self:processExpressionNode(elem.Key)
     local valueRegister = self:processExpressionNode(elem.Value)
+
+    -- OP_SETTABLE [A, B, C]    R(A)[R(B)] := R(C)
     self:emitInstruction("SETTABLE", register, keyRegister, valueRegister)
     self:freeRegisters(2)
     -- end)
@@ -2617,12 +2595,18 @@ function CodeGenerator:processVariable(node, register)
 
   if varType == "Local" then
     local variable = self:findVariableRegister(varName)
+
+    -- OP_MOVE [A, B]    R(A) := R(B)
     self:emitInstruction("MOVE", register, variable)
   elseif varType == "Global" then
     local constantIndex = self:findOrCreateConstant(varName)
+
+    -- OP_GETGLOBAL [A, Bx]    R(A) := Gbl[Kst(Bx)]
     self:emitInstruction("GETGLOBAL", register, constantIndex)
   elseif varType == "Upvalue" then
     local upvalueIndex = self:findOrCreateUpvalue(varName)
+
+    -- OP_GETUPVAL [A, B]    R(A) := UpValue[B]
     self:emitInstruction("GETUPVAL", register, upvalueIndex)
   end
 
@@ -2914,6 +2898,8 @@ function CodeGenerator:processReturnStatement(node)
         tempRegister,
         -1
       )
+
+      -- OP_TAILCALL [A, B, C]    return R(A)(R(A+1), ... ,R(A+B-1))
       local callInstruction = self.proto.code[#self.proto.code]
       callInstruction[1] = "TAILCALL" -- Change CALL to TAILCALL
       numResults         = -1         -- -1 = MULTIRET (all results)
@@ -2923,6 +2909,7 @@ function CodeGenerator:processReturnStatement(node)
     self:freeRegisters(exprRegisters)
   end
 
+  -- OP_RETURN [A, B]    return R(A), ... ,R(A+B-2)
   self:emitInstruction("RETURN", resultRegister, numResults + 1, 0)
 end
 
@@ -3084,6 +3071,8 @@ function CodeGenerator:processFunction(functionNode, closureRegister)
   if closureRegister then
     local protoIndex = #parentProto.protos + 1
     parentProto.protos[protoIndex] = childProto
+
+    -- OP_CLOSURE [A, Bx]    R(A) := closure(KPROTO[Bx], R(A), ... ,R(A+n))
     self:emitInstruction("CLOSURE", closureRegister, protoIndex - 1, 0) -- Proto indices are zero-based.
 
     -- After the "CLOSURE" instruction, we need to set up the upvalues
