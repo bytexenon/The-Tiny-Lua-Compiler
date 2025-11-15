@@ -11,8 +11,9 @@ _Inspired by [Jamie Kyle's The Super Tiny Compiler](https://github.com/jamiebuil
 ## Features
 
 - **Heavily Commented & Educational**: The code is written to be read, with over 50% of the file dedicated to comments explaining the what, how, and why of each step.
-- [**Self-compiling**](<https://en.wikipedia.org/wiki/Self-hosting_(compilers)>): TLC is powerful enough to compile its own source code, producing a new, fully-functional version of itself. This is the final milestone in compiler design, demonstrating that the compiler can handle the complexities of its own syntax and semantics.
+- [**Self-compiling**](<https://en.wikipedia.org/wiki/Self-hosting_(compilers)>): TLC can compile itself and run the result inside its own VM (Virtual Machine).
 - **Zero dependencies**: Written in standard Lua 5.1 with no external libraries. Just one file and the Lua interpreter are all you need.
+- **Complete Pipeline:** Includes a tokenizer, parser, code generator, compiler, and a virtual machine, all in one file.
 - **Speed**: While education is the priority, the tokenizer uses optimized lookups and the compiler is designed efficiently, making it quite fast for a compiler written in a high-level language.
 - **100% test coverage**: TLC has a test suite that covers 100% of the code. Want to see it in action? Run `lua tests/test.lua` in your terminal.
 
@@ -64,28 +65,18 @@ local source = [[
 -- 2. Compilation Pipeline
 -- -----------------------
 
--- Alternatively, you can use `tlc.fullCompile(source)` to do all of the steps in one go.
--- The `fullCompile` function is a stable entry point that ensures future compatibility.
--- It handles the entire compilation process, so you don't have to worry about the
--- internal steps changing in future versions of TLC.
-
 -- Tokenize: Raw text -> Stream of tokens
-local tokens   = tlc.Tokenizer.new(source):tokenize()
+local tokens = tlc.Tokenizer.new(source):tokenize()
 
 -- Parse: Stream of tokens -> Abstract Syntax Tree (AST)
-local ast      = tlc.Parser.new(tokens):parse()
+local ast = tlc.Parser.new(tokens):parse()
 
 -- Generate Code: AST -> Function Prototype (Intermediate Representation)
-local proto    = tlc.CodeGenerator.new(ast):generate()
-
--- Compile: Function Prototype -> Final Lua Bytecode String
-local bytecode = tlc.Compiler.new(proto):compile()
+local proto = tlc.CodeGenerator.new(ast):generate()
 
 -- 3. Execution
--- ------------
--- NOTE: Requires Lua 5.1 to run the bytecode.
-local compiledFunction = loadstring(bytecode)
-compiledFunction() -- Execute the compiled bytecode
+-- Run the prototype in the Virtual Machine
+tlc.VirtualMachine.new(proto):execute()
 
 --[[
   EXPECTED OUTPUT:
@@ -94,10 +85,6 @@ compiledFunction() -- Execute the compiled bytecode
   Hello from TLC! 3
 --]]
 ```
-
-<sup><sub>
-`loadstring` can be used not only to load and execute Lua 5.1 *human-readable code*, but it also supports loading Lua 5.1 *bytecode* - which is exactly what TLC generates. This means you can run code compiled by TLC directly with `loadstring`. Alternatively, you can write the bytecode to a file and execute it with `lua <filename>`.
-</sub></sup>
 
 ### Okay so where do I begin?
 
@@ -112,6 +99,11 @@ lua tests/test.lua
 ```
 
 ### AST Node Specifications
+
+The parser generates a tree of nodes. Here is the specification for each node type.
+
+<details>
+<summary>Click to expand AST Specification</summary>
 
 #### **Literals & Identifiers**
 *   `{ TYPE = "StringLiteral", Value = <string> }`
@@ -148,6 +140,8 @@ lua tests/test.lua
 #### **Program Structure**
 *   `{ TYPE = "Block", Statements = <list_of_statement> }`
 *   `{ TYPE = "Program", Body = <Block> }`
+
+</details>
 
 ### Support The Tiny Lua Compiler (TLC)
 
