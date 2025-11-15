@@ -3610,12 +3610,462 @@ function Compiler:compile()
   return self.CONFIG.LUA_COMMON_HEADER .. self:makeFunction(self.mainProto)
 end
 
+--[[
+    ============================================================================
+                                      (/^▽^)/
+                                   THE VIRTUAL MACHINE!
+    ============================================================================
+--]]
+
+--* Constants *--
+local LUA_STACK_TOP = 0
+
+--* VirtualMachine *--
+local VirtualMachine = {}
+VirtualMachine.__index = VirtualMachine -- Set up for method calls via `.`
+
+VirtualMachine._CONFIG = {
+  -- Number of list items to accumulate before a SETLIST instruction.
+  LFIELDS_PER_FLUSH = 50
+}
+
+--// VirtualMachine Constructor //--
+function VirtualMachine.new(proto)
+  local self = setmetatable({}, VirtualMachine)
+
+  self.mainProto = proto -- Should only be used in `:execute()`.
+  self.lclosure  = nil   -- Current closure we're working with.
+
+  return self
+end
+
+--// Auxiliary functions //--
+function VirtualMachine:getLength(...)
+  return select("#", ...)
+end
+
+function VirtualMachine:pushClosure(closure)
+  closure = {
+    nupvalues = closure.nupvalues or 0,
+    env       = closure.env       or _G,
+    proto     = closure.proto,
+    upvalues  = closure.upvalues  or {},
+  }
+  self.lclosure = closure
+
+  return closure
+end
+
+--// Execution //--
+function VirtualMachine:executeClosure(...)
+  -- Optimization: localize fields.
+  local lclosure  = self.lclosure
+  local stack     = {}
+  local env       = lclosure.env
+  local proto     = lclosure.proto
+  local upvalues  = lclosure.upvalues
+  local code      = proto.code
+  local constants = proto.constants
+  local numparams = proto.numParams
+  local isVararg  = proto.isVararg
+
+  local maxStackSize = proto.maxStackSize
+  local top = maxStackSize
+
+  -- Initialize parameters.
+  local vararg
+  local params = { ... }
+
+  for paramIdx = 1, numparams do
+    stack[paramIdx - 1] = params[paramIdx]
+  end
+  if isVararg then
+    vararg = { select(numparams + 1, ...) }
+    stack[numparams] = vararg -- Implicit "arg" argument.
+  end
+
+  -- Only gets set to a table of results when we have to return.
+  local returnValues = nil
+
+  -- Prepare for execution loop.
+  local pc = 1
+  while true do
+    local instruction = code[pc]
+    if not instruction then
+      break
+    end
+
+    local opcode, a, b, c = instruction[1], instruction[2], instruction[3], instruction[4]
+
+    -- OP_MOVE [A, B]    R(A) := R(B)
+    if opcode == "MOVE" then
+      stack[a] = stack[b]
+
+    -- OP_LOADK [A, Bx]    R(A) = Kst(Bx)
+    elseif opcode == "LOADK" then
+      stack[a] = constants[-b]
+
+    -- OP_LOADBOOL [A, B, C]    R(A) := (Bool)B; if (C) pc++
+    elseif opcode == "LOADBOOL" then
+      stack[a] = (b == 1)
+      if c == 1 then
+        pc = pc + 1
+      end
+
+    -- OP_LOADNIL [A, B]    R(A) := ... := R(B) := nil
+    elseif opcode == "LOADNIL" then
+      for reg = b, a, -1 do
+        stack[reg] = nil
+      end
+
+    -- OP_GETUPVAL [A, B]    R(A) := UpValue[B]
+    elseif opcode == "GETUPVAL" then
+      local upvalue = upvalues[b + 1]
+      stack[a] = upvalue.stack[upvalue.index]
+
+    -- OP_GETGLOBAL [A, Bx]    R(A) := Gbl[Kst(Bx)]
+    elseif opcode == "GETGLOBAL" then
+      stack[a] = env[constants[-b]]
+
+    -- OP_GETTABLE [A, B, C]    R(A) := R(B)[RK(C)]
+    elseif opcode == "GETTABLE" then
+      stack[a] = stack[b][stack[c] or constants[-c]]
+
+    -- OP_SETGLOBAL [A, Bx]    Gbl[Kst(Bx)] := R(A)
+    elseif opcode == "SETGLOBAL" then
+      env[stack[b] or constants[-b]] = stack[a]
+
+    -- OP_SETUPVAL [A, B]    UpValue[B] := R(A)
+    elseif opcode == "SETUPVAL" then
+      local upvalue = upvalues[b + 1]
+      upvalue.stack[upvalue.index] = stack[a]
+
+    -- OP_SETTABLE [A, B, C]    R(A)[R(B)] := R(C)
+    elseif opcode == "SETTABLE" then
+      stack[a][stack[b] or constants[-b]] = stack[c] or constants[-c]
+
+    -- OP_NEWTABLE [A, B, C]    R(A) := {} (size = B,C)
+    elseif opcode == "NEWTABLE" then
+      stack[a] = {}
+
+    -- OP_SELF [A, B, C]    R(A+1) := R(B) R(A) := R(B)[RK(C)]
+    elseif opcode == "SELF" then
+      local rb = stack[b]
+      stack[a + 1] = rb
+      stack[a] = rb[stack[c] or constants[-c]]
+
+    -- OP_ADD [A, B, C]    R(A) := RK(B) + RK(C)
+    elseif opcode == "ADD" then
+      stack[a] = (stack[b] or constants[-b]) + (stack[c] or constants[-c])
+
+    -- OP_SUB [A, B, C]    R(A) := RK(B) - RK(C)
+    elseif opcode == "SUB" then
+      stack[a] = (stack[b] or constants[-b]) - (stack[c] or constants[-c])
+
+    -- OP_MUL [A, B, C]    R(A) := RK(B) * RK(C)
+    elseif opcode == "MUL" then
+      stack[a] = (stack[b] or constants[-b]) * (stack[c] or constants[-c])
+
+    -- OP_DIV [A, B, C]    R(A) := RK(B) / RK(C)
+    elseif opcode == "DIV" then
+      stack[a] = (stack[b] or constants[-b]) / (stack[c] or constants[-c])
+
+    -- OP_MOD [A, B, C]    R(A) := RK(B) % RK(C)
+    elseif opcode == "MOD" then
+      stack[a] = (stack[b] or constants[-b]) % (stack[c] or constants[-c])
+
+    -- OP_POW [A, B, C]    R(A) := RK(B) ^ RK(C)
+    elseif opcode == "POW" then
+      stack[a] = (stack[b] or constants[-b]) ^ (stack[c] or constants[-c])
+
+    -- OP_UNM [A, B]    R(A) := -R(B)
+    elseif opcode == "UNM" then
+      stack[a] = -stack[b]
+
+    -- OP_NOT [A, B]    R(A) := not R(B)
+    elseif opcode == "NOT" then
+      stack[a] = not stack[b]
+
+    -- OP_LEN [A, B]    R(A) := length of R(B)
+    elseif opcode == "LEN" then
+      stack[a] = #stack[b]
+
+    -- OP_CONCAT [A, B, C]    R(A) := R(B).. ... ..R(C)
+    elseif opcode == "CONCAT" then
+      local values = {}
+      for reg = b, c do
+        table.insert(values, stack[reg])
+      end
+      stack[a] = table.concat(values)
+
+    -- OP_JMP [A, sBx]    pc+=sBx
+    elseif opcode == "JMP" then
+      pc = pc + b
+
+    -- OP_EQ [A, B, C]    if ((RK(B) == RK(C)) ~= A) then pc++
+    elseif opcode == "EQ" then
+      if ((stack[b] or constants[-b]) == (stack[c] or constants[-c])) ~= (a == 1) then
+        pc = pc + 1
+      end
+
+    -- OP_LT [A, B, C]    if ((RK(B) < RK(C)) ~= A) then pc++
+    elseif opcode == "LT" then
+      if ((stack[b] or constants[-b]) < (stack[c] or constants[-c])) ~= (a == 1) then
+        pc = pc + 1
+      end
+
+    -- OP_LE [A, B, C]    if ((RK(B) <= RK(C)) ~= A) then pc++
+    elseif opcode == "LE" then
+      if ((stack[b] or constants[-b]) <= (stack[c] or constants[-c])) ~= (a == 1) then
+        pc = pc + 1
+      end
+
+    -- OP_TEST [A, C]    if not (R(A) <=> C) then pc++
+    elseif opcode == "TEST" then
+      if not stack[a] == (c == 1) then
+        pc = pc + 1
+      end
+
+    -- OP_TESTSET [A, B, C]    if (R(B) <=> C) then R(A) := R(B) else pc++
+    elseif opcode == "TESTSET" then
+      if not stack[a] == (c == 1) then
+        stack[a] = stack[b]
+      else
+        pc = pc + 1
+      end
+
+    -- OP_CALL [A, B, C]    R(A), ... ,R(A+C-2) := R(A)(R(A+1), ... ,R(A+B-1))
+    elseif opcode == "CALL" then
+      local func = stack[a]
+      local args = {}
+      local nArgs
+      if b ~= LUA_STACK_TOP then
+        nArgs = b - 1
+        for index = 1, nArgs do
+          table.insert(args, stack[a + index])
+        end
+      else
+        nArgs = top - (a + 1)
+        for index = a + 1, top - 1 do
+          table.insert(args, stack[index])
+        end
+      end
+
+      local returns = { func(unpack(args)) }
+
+      if c ~= LUA_STACK_TOP then
+        for index = 0, c - 2 do
+          stack[a + index] = returns[index + 1]
+        end
+      else
+        -- Multi-return: push all results onto the stack.
+        local nReturns = self:getLength(unpack(returns))
+        top = a + nReturns
+        for index = 1, nReturns do
+          stack[a + index - 1] = returns[index]
+        end
+      end
+
+    -- OP_TAILCALL [A, B, C]    return R(A)(R(A+1), ... ,R(A+B-1))
+    elseif opcode == "TAILCALL" then
+      local func = stack[a]
+      local args = {}
+      if b ~= LUA_STACK_TOP then
+        for reg = a + 1, a + b - 1 do
+          table.insert(args, stack[reg])
+        end
+      else
+        for reg = a + 1, a + top do
+          table.insert(args, stack[reg])
+        end
+      end
+
+      local returns = { func(unpack(args)) }
+      local nReturns = self:getLength(unpack(returns))
+      top = a + nReturns - 1
+      for index = 1, nReturns do
+        stack[a + index - 1] = returns[index]
+      end
+
+    -- OP_RETURN [A, B]    return R(A), ... ,R(A+B-2)
+    elseif opcode == "RETURN" then
+      local returns = {}
+      if b == LUA_STACK_TOP then
+        for reg = a, top do
+          table.insert(returns, stack[reg])
+        end
+      else
+        for reg = a, a + b - 2 do
+          table.insert(returns, stack[reg])
+        end
+      end
+
+      returnValues = returns
+      break
+
+    -- OP_FORLOOP [A, sBx]   R(A)+=R(A+2)
+    --                       if R(A) <?= R(A+1) then { pc+=sBx R(A+3)=R(A) }
+    elseif opcode == "FORLOOP" then
+      local step  = stack[a + 2]
+      local idx   = stack[a] + step
+      local limit = stack[a + 1]
+      if (step < 0 and idx >= limit) or (step > 0 and idx <= limit) then
+        pc = pc + b
+        stack[a] = idx
+        stack[a + 3] = idx
+      end
+
+    -- OP_FORPREP [A, sBx]    R(A)-=R(A+2) pc+=sBx
+    elseif opcode == "FORPREP" then
+      local init = stack[a]
+      local plimit = stack[a + 1]
+      local pstep = stack[a + 2]
+      if not tonumber(init) then
+        error("Initial value must be a number")
+      elseif not tonumber(plimit) then
+        error("Limit must be a number")
+      elseif not tonumber(pstep) then
+        error("Step must be a number")
+      end
+
+      stack[a] = init - pstep
+      pc = pc + b
+
+    -- OP_TFORLOOP [A, C]    R(A+3), ... ,R(A+2+C) := R(A)(R(A+1), R(A+2))
+    --                       if R(A+3) ~= nil then R(A+2)=R(A+3) else pc++
+    elseif opcode == "TFORLOOP" then
+      local cb = a + 3
+
+      -- Copy function and arguments for the call.
+      stack[cb + 2] = stack[a + 2] -- The iterator function.
+      stack[cb + 1] = stack[a + 1] -- The state.
+      stack[cb] = stack[a]         -- The control variable.
+
+      -- Call the iterator function.
+      local iteratorFunc = stack[cb]
+      local returns = { iteratorFunc(stack[cb + 1], stack[cb + 2]) }
+
+      -- Place results on the stack, starting at cb.
+      -- The number of results to keep is specified by `c`.
+      for i = 1, c do
+        stack[cb + i - 1] = returns[i]
+      end
+
+      -- Check if the new control variable is nil.
+      if stack[cb] ~= nil then
+        -- If not nil, copy it to R(A+2) (the control variable).
+        stack[cb - 1] = stack[cb]
+      else
+        -- Otherwise, skip the next instruction.
+        -- (Should be the jump back to the loop start.)
+        pc = pc + 1
+      end
+
+    -- OP_SETLIST [A, B, C]    R(A)[(C-1)*FPF+i] := R(A+i), 1 <= i <= B
+    elseif opcode == "SETLIST" then
+      local n = b
+      if n == LUA_STACK_TOP then
+        n = top - a - 1
+      end
+
+      local h = stack[a]
+      assert(type(h) == "table")
+
+      local last = ((c - 1) * self._CONFIG.LFIELDS_PER_FLUSH) + n
+      for i = n, 1, -1 do
+        local val = stack[a + i]
+        h[last] = val
+        last = last - 1
+      end
+
+    -- OP_VARARG [A]    close all variables in the stack up to (>=) R(A)
+    elseif opcode == "CLOSE" then
+      -- Stub. No implementation needed for this VM.
+
+    -- OP_CLOSURE [A, Bx]    R(A) := closure(KPROTO[Bx], R(A), ... ,R(A+n))
+    elseif opcode == "CLOSURE" then
+      local tProto = proto.protos[b + 1]
+      local tProtoUpvalues = {}
+
+      for _ = 1, #tProto.upvalues do
+        pc = pc + 1
+        local instr = code[pc]
+        local opname = instr[1]
+        if opname == "MOVE" then
+          table.insert(tProtoUpvalues, {
+            stack = stack,
+            index = instr[3],
+          })
+        elseif opname == "GETUPVAL" then
+          local upvalue = upvalues[instr[3] + 1]
+          table.insert(tProtoUpvalues, {
+            stack = upvalue.stack,
+            index = upvalue.index,
+          })
+        else
+          error("Unexpected instruction: " .. opname)
+        end
+      end
+
+      local tClosure = {
+        nupvalues = #tProtoUpvalues,
+        env       = nil,
+        proto     = tProto,
+        upvalues  = tProtoUpvalues,
+      }
+
+      stack[a] = function(...)
+        self:pushClosure(tClosure)
+        local returns = { self:executeClosure(...) }
+        self:pushClosure(lclosure)
+
+        return unpack(returns)
+      end
+
+    -- OP_VARARG [A, B]    R(A), R(A+1), ..., R(A+B-1) = vararg
+    elseif opcode == "VARARG" then
+      local varargCount = #vararg
+      if b == LUA_STACK_TOP then
+        top = a + varargCount
+        for i = 1, varargCount do
+          stack[a + i - 1] = vararg[i]
+        end
+      else
+        for i = 1, b - 1 do
+          stack[a + i - 1] = vararg[i]
+        end
+      end
+    else
+      error("Unimplemented instruction: " .. tostring(opcode))
+    end
+
+    pc = pc + 1
+  end
+
+  if returnValues then
+    return unpack(returnValues)
+  end
+end
+
+function VirtualMachine:execute()
+  -- Push main closure.
+  self:pushClosure({
+    nupvalues = 0,
+    env       = _G,
+    proto     = self.mainProto,
+    upvalues  = {},
+  })
+
+  return self:executeClosure()
+end
+
 -- Now I'm just exporting everything...
 return {
-  Tokenizer     = Tokenizer,
-  Parser        = Parser,
-  CodeGenerator = CodeGenerator,
-  Compiler      = Compiler,
+  Tokenizer      = Tokenizer,
+  Parser         = Parser,
+  CodeGenerator  = CodeGenerator,
+  Compiler       = Compiler,
+  VirtualMachine = VirtualMachine,
 
   -- Shortcuts for convenience.
   -- It is highly recommended to use these shortcut functions for all tasks!
