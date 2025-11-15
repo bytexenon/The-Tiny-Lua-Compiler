@@ -3822,7 +3822,7 @@ function VirtualMachine:executeClosure(...)
     -- Boolean test, with a conditional jump.
     elseif opcode == "TEST" then
       local bool = (c == 1)
-      if not stack[a] == bool then
+      if (not stack[a]) == bool then
         pc = pc + 1
       end
 
@@ -3830,7 +3830,7 @@ function VirtualMachine:executeClosure(...)
     -- Boolean test, with conditional assignment and jump.
     elseif opcode == "TESTSET" then
       local bool = (c == 1)
-      if not stack[a] == bool then
+      if (not stack[a]) == bool then
         stack[a] = stack[b]
       else
         pc = pc + 1
@@ -4002,21 +4002,22 @@ function VirtualMachine:executeClosure(...)
       -- over them while processing the CLOSURE instruction.
       for _ = 1, #tProto.upvalues do
         pc = pc + 1
-        local instr = code[pc]
-        local opname = instr[1]
+
+        local pseudoInstruction = code[pc]
+        local opname = pseudoInstruction[1]
         if opname == "MOVE" then
           table.insert(tProtoUpvalues, {
             stack = stack,
-            index = instr[3],
+            index = pseudoInstruction[3],
           })
         elseif opname == "GETUPVAL" then
-          local upvalue = upvalues[instr[3] + 1]
+          local upvalue = upvalues[pseudoInstruction[3] + 1]
           table.insert(tProtoUpvalues, {
             stack = upvalue.stack,
             index = upvalue.index,
           })
         else
-          error("Unexpected instruction: " .. opname)
+          error("Unexpected instruction while capturing upvalues: " .. tostring(opname))
         end
       end
 
