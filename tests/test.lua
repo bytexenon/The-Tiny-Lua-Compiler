@@ -513,7 +513,13 @@ suite:describe("Loops", function()
     suite:it("works with a custom iterator", function()
       suite:compileAndRunChecked([[
         local sum = 0
-        for v in (function() local n=0; return function() n=n+1; return n<=3 and n*3 or nil end end)() do
+        for v in (function()
+          local n=0;
+          return function()
+            n=n+1;
+            return n<=3 and n*3 or nil
+          end
+        end)() do
           sum = sum + v
         end
         return sum
@@ -549,15 +555,45 @@ suite:describe("Scoping and Closures", function()
 
   suite:describe("Upvalues", function()
     suite:it("captures variables from an outer function", function()
-      suite:compileAndRunChecked([[local function outer() local x=5; return function() return x end end; return outer()()]])
+      suite:compileAndRunChecked([[
+        local function outer()
+          local x=5;
+          return function()
+            return x
+          end
+        end;
+        return outer()()
+      ]])
     end)
 
     suite:it("modifies captured upvalues", function()
-      suite:compileAndRunChecked([[local function outer() local x=5; return function() x=x+1; return x end end; local i=outer(); i(); return i()]])
+      suite:compileAndRunChecked([[
+        local function outer()
+          local x=5;
+          return function()
+            x=x+1;
+            return x
+          end
+        end;
+        local i=outer();
+        i();
+        return i()
+      ]])
     end)
 
     suite:it("handles multi-level closures", function()
-      suite:compileAndRunChecked([[local function l1() local a=1; return function() local b=2; return function() return a+b end end end; return l1()()()]])
+      suite:compileAndRunChecked([[
+        local function l1()
+          local a=1;
+          return function()
+            local b=2;
+            return function()
+              return a+b
+            end
+          end
+        end;
+        return l1()()()
+      ]])
     end)
   end)
 end)
@@ -565,42 +601,92 @@ end)
 suite:describe("Functions", function()
   suite:describe("Definitions", function()
     suite:it("handles anonymous function expressions", function()
-      suite:compileAndRunChecked([[local f = function() return 42 end; return f()]])
+      suite:compileAndRunChecked([[
+        local f = function()
+          return 42
+        end;
+        return f()
+      ]])
     end)
     suite:it("handles named function syntax sugar", function()
       suite:compileAndRunChecked([[function f() return 1 end; return f()]])
     end)
     suite:it("handles local function syntax for recursion", function()
-      suite:compileAndRunChecked(
-      [[local function fact(n) if n==0 then return 1 else return n*fact(n-1) end end; return fact(5)]])
+      suite:compileAndRunChecked([[
+        local function fact(n)
+          if n==0 then
+            return 1
+          else
+            return n*fact(n-1)
+          end
+        end;
+        return fact(5)
+      ]])
     end)
     suite:it("handles table method definitions", function()
-      suite:compileAndRunChecked([[local t={x=10}; function t:add(y) return self.x+y end; return t:add(5)]])
+      suite:compileAndRunChecked([[
+        local t={x=10};
+        function t:add(y)
+          return self.x+y
+        end;
+        return t:add(5)
+      ]])
     end)
   end)
 
   suite:describe("Calls", function()
     suite:it("handles parenthesis-less calls with a string literal", function()
-      suite:compileAndRunChecked([[local s=""; local function f(x) s=x end; f"hello"; return s]])
+      suite:compileAndRunChecked([[
+        local s="";
+        local function f(x)
+          s=x
+        end;
+        f"hello";
+        return s
+      ]])
     end)
     suite:it("handles parenthesis-less calls with a table constructor", function()
-      suite:compileAndRunChecked([[local t; local function f(x) t=x end; f{1,2}; return t[2] ]])
+      suite:compileAndRunChecked([[
+        local t;
+        local function f(x)
+          t=x
+        end;
+        f{1,2};
+        return t[2]
+      ]])
     end)
     suite:it("handles method calls with the colon syntax", function()
-      suite:compileAndRunChecked([[local t={x=10, f=function(self,y) return self.x+y end}; return t:f(5)]])
+      suite:compileAndRunChecked([[
+        local t={x=10, f=function(self,y)
+          return self.x+y
+        end};
+        return t:f(5)
+      ]])
     end)
   end)
 
   suite:describe("Varargs", function()
     suite:it("captures variable arguments", function()
-      suite:compileAndRunChecked([[local f = function(...) local t={...}; return t[2] end; return f(1,2,3)]])
+      suite:compileAndRunChecked([[
+        local f = function(...)
+          local t={...};
+          return t[2]
+        end;
+        return f(1,2,3)
+      ]])
     end)
   end)
 
   suite:describe("Tail Calls", function()
     suite:it("performs tail calls to avoid stack overflow", function()
       suite:compileAndRunChecked([[
-          local function f(n) if n > 0 then return f(n - 1) else return 42 end end
+          local function f(n)
+            if n > 0 then
+              return f(n - 1)
+            else
+              return 42
+            end
+          end
           return f(2000) -- Would normally cause a stack overflow
       ]])
     end)
