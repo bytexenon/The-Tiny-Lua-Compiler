@@ -1944,9 +1944,17 @@ CodeGenerator.CONFIG = {
   MAX_REGISTERS  = 250, -- 200 variables, 50 temp (5 reserved for safety)
   SETLIST_MAX    = 50,  -- Max number of table elements for a single SETLIST instruction
 
+  -- Node types that can return multiple values (multiret)
   MULTIRET_NODES = createLookupTable({"FunctionCall", "VarargExpression"}),
+
+  -- Node types that be stored as constants in `proto.constants` table
+  CONSTANT_NODES = createLookupTable({"StringLiteral", "NumericLiteral"}),
   CONTROL_FLOW_OPERATOR_LOOKUP = createLookupTable({"and", "or"}),
-  UNARY_OPERATOR_LOOKUP = { ["-"] = "UNM", ["#"] = "LEN", ["not"] = "NOT" },
+  UNARY_OPERATOR_LOOKUP = {
+    ["-"]   = "UNM",
+    ["#"]   = "LEN",
+    ["not"] = "NOT"
+  },
   ARITHMETIC_OPERATOR_LOOKUP = {
     ["+"] = "ADD", ["-"] = "SUB",
     ["*"] = "MUL", ["/"] = "DIV",
@@ -1980,6 +1988,7 @@ CodeGenerator.CONFIG = {
     ["IndexExpression"]         = "processIndexExpression",
     ["VarargExpression"]        = "processVarargExpression",
   },
+
   STATEMENT_HANDLERS = {
     ["CallStatement"]             = "processCallStatement",
     ["LocalDeclarationStatement"] = "processLocalDeclarationStatement",
@@ -2277,9 +2286,7 @@ end
 
 --// Auxiliary/Helper Methods //--
 
--- Returns either "Upvalue", "Local", or "Global".
--- TODO: We shouldn't do that at compiling phase.
---       Is there a better way to do that?
+-- Determines whether a variable is local, upvalue, or global.
 function CodeGenerator:getUpvalueType(variableName)
   local scope = self.currentScope
   local isUpvalue = false
@@ -2367,7 +2374,7 @@ function CodeGenerator:setRegisterValue(node, copyFromRegister)
 end
 
 -- TODO: Make it much cleaner
--- NOTE: `isLastElementImplicit` is needed to prevent false multirets
+-- NOTE: `isLastElemImplicit` is needed to prevent false multirets
 --        in case there's an explicit node element that goes just after
 --        the supposed multiret implicit element. Like here:
 --        `{ 1, 2, get_three_four(), a = 2 }`. The table should look like this:
@@ -2475,13 +2482,13 @@ function CodeGenerator:processBinaryOperator(node, register)
     local leftReg      = self:processConstantOrExpression(left, register)
     local rightReg     = self:processConstantOrExpression(right)
     local nodeOperator = self.CONFIG.COMPARISON_INSTRUCTION_LOOKUP[operator]
-    local instruction, flag = nodeOperator[1], nodeOperator[2]
+    local instruction, opposite = nodeOperator[1], nodeOperator[2]
 
     local flip = (operator == ">" or operator == ">=")
     local b, c = leftReg, rightReg
     if flip then b, c = rightReg, leftReg end
 
-    self:emitInstruction(instruction, flag, b, c)
+    self:emitInstruction(instruction, opposite, b, c)
     self:emitInstruction("JMP", 0, 1)
 
     -- OP_LOADBOOL [A, B, C]    R(A) := (Bool)B; if (C) pc++
@@ -3015,8 +3022,37 @@ function CodeGenerator:processFunctionBody(node)
   end
 
   self:processStatementList(node.Body.Statements)
-  self:emitInstruction("RETURN", 0, 1, 0) -- Default return statement
+  -- Generate default return statement.
+  self:emitInstruction("RETURN", 0, 1, 0)
   self:leaveScope()
+end
+
+-- Adds `proto` prototype to the `self.proto.protos` list and generates
+-- the "CLOSURE" and upvalue capturing pseudo instructions.
+function CodeGenerator:generateClosure(proto, closureRegister)
+  local parentProto = self.proto
+  local protoIndex  = #parentProto.protos + 1
+  table.insert(parentProto.protos, proto)
+
+  -- OP_CLOSURE [A, Bx]    R(A) := closure(KPROTO[Bx], R(A), ... ,R(A+n))
+  -- Proto indices are zero-based.
+  self:emitInstruction("CLOSURE", closureRegister, protoIndex - 1, 0)
+
+  -- After the "CLOSURE" instruction, we need to set up the upvalues
+  -- for the newly created function prototype. It is done by pseudo
+  -- instructions that follow the CLOSURE instruction.
+  for _, upvalueName in ipairs(proto.upvalues) do
+    local upvalueType = self:getUpvalueType(upvalueName)
+    if upvalueType == "Local" then
+      -- OP_MOVE [A, B]    R(A) := R(B)
+      self:emitInstruction("MOVE", 0, self:findVariableRegister(upvalueName))
+    elseif upvalueType == "Upvalue" then
+      -- OP_GETUPVAL [A, B]    R(A) := UpValue[B]
+      self:emitInstruction("GETUPVAL", 0, self:findOrCreateUpvalue(upvalueName))
+    else -- Assume it's a global.
+      error("Compiler: Possible parser error, the upvalue cannot be a global: " .. upvalueName)
+    end
+  end
 end
 
 -- Processes and compiles a function node into a function prototype.
@@ -3035,27 +3071,7 @@ function CodeGenerator:processFunction(functionNode, closureRegister)
   self.proto = parentProto
 
   if closureRegister then
-    local protoIndex = #parentProto.protos + 1
-    parentProto.protos[protoIndex] = childProto
-
-    -- OP_CLOSURE [A, Bx]    R(A) := closure(KPROTO[Bx], R(A), ... ,R(A+n))
-    self:emitInstruction("CLOSURE", closureRegister, protoIndex - 1, 0) -- Proto indices are zero-based.
-
-    -- After the "CLOSURE" instruction, we need to set up the upvalues
-    -- for the newly created function prototype. It is done by pseudo
-    -- instructions that follow the CLOSURE instruction.
-    for _, upvalueName in ipairs(childProto.upvalues) do
-      local upvalueType = self:getUpvalueType(upvalueName)
-      if upvalueType == "Local" then
-        -- OP_MOVE [A, B]    R(A) := R(B)
-        self:emitInstruction("MOVE", 0, self:findVariableRegister(upvalueName))
-      elseif upvalueType == "Upvalue" then
-        -- OP_GETUPVAL [A, B]    R(A) := UpValue[B]
-        self:emitInstruction("GETUPVAL", 0, self:findOrCreateUpvalue(upvalueName))
-      else -- Assume it's a global.
-        error("Compiler: Possible parser error, the upvalue cannot be a global: " .. upvalueName)
-      end
-    end
+    self:generateClosure(childProto, closureRegister)
   end
 
   return childProto
