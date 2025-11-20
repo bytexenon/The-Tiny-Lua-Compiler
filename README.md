@@ -106,41 +106,41 @@ The parser generates a tree of nodes. Here is the specification for each node ty
 <summary>Click to expand AST Specification</summary>
 
 #### **Literals & Identifiers**
-*   `{ TYPE = "Variable", Name = <string>, VariableType = <"Local" | "Global" | "Upvalue"> }`
-*   `{ TYPE = "StringLiteral", Value = <string> }`
-*   `{ TYPE = "NumericLiteral", Value = <number> }`
-*   `{ TYPE = "BooleanLiteral", Value = <bool> }`
-*   `{ TYPE = "NilLiteral" }`
-*   `{ TYPE = "VarargExpression" }`
+*   `{ kind = "Variable", name = <string>, variableType = <"Local" | "Global" | "Upvalue"> }`
+*   `{ kind = "StringLiteral", value = <string> }`
+*   `{ kind = "NumericLiteral", value = <number> }`
+*   `{ kind = "BooleanLiteral", value = <bool> }`
+*   `{ kind = "NilLiteral" }`
+*   `{ kind = "VarargExpression" }`
 
 #### **Expressions**
-*   `{ TYPE = "FunctionExpression", Body = <Block>, Parameters = <list_of_strings>, IsVarArg = <bool> }`
-*   `{ TYPE = "UnaryOperator", Operator = <string>, Operand = <node> }`
-*   `{ TYPE = "BinaryOperator", Operator = <string>, Left = <node>, Right = <node> }`
-*   `{ TYPE = "FunctionCall", Callee = <node>, Arguments = <list_of_nodes>, IsMethodCall = <bool> }`
-*   `{ TYPE = "IndexExpression", Base = <node>, Index = <node>, IsPrecomputed = <bool>? }`
-*   `{ TYPE = "TableConstructor", Elements = <list_of_TableElement> }`
-*   `{ TYPE = "TableElement", Key = <node>, Value = <node>, IsImplicitKey = <bool> }`
-*   `{ TYPE = "ParenthesizedExpression", Expression = <node> }`
+*   `{ kind = "FunctionExpression", body = <Block>, parameters = <list_of_strings>, isVarArg = <bool> }`
+*   `{ kind = "UnaryOperator", operator = <string>, operand = <node> }`
+*   `{ kind = "BinaryOperator", operator = <string>, left = <node>, right = <node> }`
+*   `{ kind = "FunctionCall", callee = <node>, arguments = <list_of_nodes>, isMethodCall = <bool> }`
+*   `{ kind = "IndexExpression", base = <node>, index = <node>, isPrecomputed = <bool>? }`
+*   `{ kind = "TableConstructor", elements = <list_of_TableElement> }`
+*   `{ kind = "TableElement", key = <node>, value = <node>, isImplicitKey = <bool> }`
+*   `{ kind = "ParenthesizedExpression", expression = <node> }`
 
 #### **Statements**
-*   `{ TYPE = "LocalDeclarationStatement", Variables = <list_of_strings>, Initializers = <list_of_nodes> }`
-*   `{ TYPE = "LocalFunctionDeclaration", Name = <string>, Body = <FunctionExpression> }`
-*   `{ TYPE = "AssignmentStatement", LValues = <list_of_nodes>, Expressions = <list_of_nodes> }`
-*   `{ TYPE = "CallStatement", Expression = <FunctionCall> }`
-*   `{ TYPE = "IfClause", Condition = <node>, Body = <Block> }`
-*   `{ TYPE = "IfStatement", Clauses = <list_of_IfClauses>, ElseClause = <Block>? }`
-*   `{ TYPE = "WhileStatement", Condition = <node>, Body = <Block> }`
-*   `{ TYPE = "RepeatStatement", Body = <Block>, Condition = <node> }`
-*   `{ TYPE = "ForNumericStatement", Variable = <Identifier>, Start = <node>, End = <node>, Step = <node>?, Body = <Block> }`
-*   `{ TYPE = "ForGenericStatement", Iterators = <list_of_strings>, Expressions = <list_of_nodes>, Body = <Block> }`
-*   `{ TYPE = "DoStatement", Body = <Block> }`
-*   `{ TYPE = "ReturnStatement", Expressions = <list_of_nodes> }`
-*   `{ TYPE = "BreakStatement" }`
+*   `{ kind = "LocalDeclarationStatement", variables = <list_of_strings>, initializers = <list_of_nodes> }`
+*   `{ kind = "LocalFunctionDeclaration", name = <string>, body = <FunctionExpression> }`
+*   `{ kind = "AssignmentStatement", lvalues = <list_of_nodes>, expressions = <list_of_nodes> }`
+*   `{ kind = "CallStatement", expression = <FunctionCall> }`
+*   `{ kind = "IfClause", condition = <node>, body = <Block> }`
+*   `{ kind = "IfStatement", clauses = <list_of_IfClauses>, elseClause = <Block>? }`
+*   `{ kind = "WhileStatement", condition = <node>, body = <Block> }`
+*   `{ kind = "RepeatStatement", body = <Block>, condition = <node> }`
+*   `{ kind = "ForNumericStatement", variable = <Identifier>, start = <node>, limit = <node>, step = <node>?, body = <Block> }`
+*   `{ kind = "ForGenericStatement", iterators = <list_of_strings>, expressions = <list_of_nodes>, body = <Block> }`
+*   `{ kind = "DoStatement", body = <Block> }`
+*   `{ kind = "ReturnStatement", expressions = <list_of_nodes> }`
+*   `{ kind = "BreakStatement" }`
 
 #### **Program Structure**
-*   `{ TYPE = "Block", Statements = <list_of_statement> }`
-*   `{ TYPE = "Program", Body = <Block> }`
+*   `{ kind = "Block", statements = <list_of_statement> }`
+*   `{ kind = "Program", body = <Block> }`
 
 </details>
 
