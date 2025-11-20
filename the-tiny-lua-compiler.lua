@@ -224,7 +224,7 @@ end
 
 -- Consumes exactly one character, but only if it matches the expected character.
 -- Used for consuming specific punctuation like '(' or '=' after identifying
--- a token type that implies the next character must be that specific one.
+-- a token kind that implies the next character must be that specific one.
 -- Throws an error if the current character doesn't match the expectation.
 function Tokenizer:consumeCharacter(character)
   if self.curChar == character then
@@ -633,11 +633,11 @@ function Tokenizer:getNextToken()
     local identifier = self:consumeIdentifier()
 
     if self.CONFIG.KEYWORDS[identifier] then
-      return { TYPE = "Keyword", Value = identifier }
+      return { kind = "Keyword", value = identifier }
     end
 
     -- Fallthrough: If it's not a keyword, it's a regular identifier (e.g. a variable).
-    return { TYPE = "Identifier", Value = identifier }
+    return { kind = "Identifier", value = identifier }
   end
 
   -- Handle numeric literals (decimal, hex, scientific, float).
@@ -649,20 +649,21 @@ function Tokenizer:getNextToken()
     if numberValue == nil then
       error("Invalid number format near '" .. numberString .. "'")
     end
-    return { TYPE = "Number", Value = numberValue }
+
+    return { kind = "Number", value = numberValue }
   end
 
   -- Handle string literals (simple or long).
   if self:isString() then
-    local stringLiteral = self:consumeString() -- Consume the string contents
-    return { TYPE = "String", Value = stringLiteral }
+    local stringLiteral = self:consumeString() -- Consume the string contents.
+    return { kind = "String", value = stringLiteral }
   end
 
   -- Handle complex literals or special multi-character tokens.
   -- Check for vararg "..." before numbers/operators that might start with ".".
   if self:isVararg() then
     self:consume(3) -- Consume the "...".
-    return { TYPE = "Vararg" }
+    return { kind = "Vararg" }
   end
 
   -- Attempt to consume a symbolic operator using the trie.
@@ -670,7 +671,7 @@ function Tokenizer:getNextToken()
   local operator = self:consumeOperator()
   if operator then
     -- If an operator was matched and consumed, return it as a token.
-    return { TYPE = "Operator", Value = operator }
+    return { kind = "Operator", value = operator }
   end
 
   -- If no other token kinds matched, look up the current character
@@ -679,11 +680,11 @@ function Tokenizer:getNextToken()
   local tokenKind = self.CONFIG.PUNCTUATION[curChar]
   if tokenKind then
     self:consume(1) -- Consume the character.
-    return { TYPE = tokenType }
+    return { kind = tokenKind }
   end
 
   -- If we reach this point, it means the current character doesn't match
-  -- any known token type. This is an error condition, as the character
+  -- any known token kind. This is an error condition, as the character
   -- is not valid in the Lua language syntax.
   error("Unexpected character '" .. curChar .. "' at position " .. self.curCharPos)
 end
@@ -853,11 +854,11 @@ function Parser:consume(n)
 end
 
 -- Helper to get a human-readable description of a token for error messages.
--- Returns a string describing the token type and value (if any).
+-- Returns a string describing the token kind and value (if any).
 function Parser:getTokenDescription(token)
   if not token then return "<end of file>" end
-  if not token.Value then return tostring(token.TYPE) end
-  return string.format("%s [%s]", tostring(token.TYPE), tostring(token.Value))
+  if not token.value then return tostring(token.kind) end
+  return string.format("%s [%s]", tostring(token.kind), tostring(token.value))
 end
 
 -- Helper to report parsing errors.
@@ -874,14 +875,15 @@ function Parser:error(message)
   )
 end
 
--- Consumes the current token, but only if its type AND value match the expectation.
+-- Consumes the current token, but only if its kind AND value match the expectation.
 -- Used for consuming specific keywords or characters (like `end`, `(`, `=`).
 -- Throws a detailed error with token location if the expectation is not met.
 -- This is a strong check for expected syntax elements.
-function Parser:consumeToken(tokenType, tokenValue)
+function Parser:consumeToken(tokenKind, tokenValue)
   local token = self.currentToken
-  -- Check if the current token exists and matches the expected type and value
-  if token and token.TYPE == tokenType and token.Value == tokenValue then
+
+  -- Check if the current token exists and matches the expected kind and value.
+  if token and token.kind == tokenKind and token.value == tokenValue then
     -- Match! Consume this token and exit the function.
     self:consume(1)
     return
@@ -891,7 +893,7 @@ function Parser:consumeToken(tokenType, tokenValue)
   self:error(
     string.format(
       "Expected %s [%s] token, got: %s",
-      tostring(tokenType),
+      tostring(tokenKind),
       tostring(tokenValue),
       self:getTokenDescription(token)
     )
@@ -975,15 +977,14 @@ function Parser:getVariableType(variableName)
 end
 
 --// Token Checkers //--
--- Lightweight checks to see if a token matches a specific type and/or value
--- without throwing an error if it doesn't match. Useful for `while` loop conditions
--- or `if` checks during parsing.
+-- Lightweight checks to see if a token matches a specific kind and/or value
+-- without throwing an error if it doesn't match.
 
--- Checks if the given `token` (or `self.currentToken`) is of the specified `tokenType`.
--- This is a generic check for any token type (e.g., "Identifier", "Number", etc.).
-function Parser:checkTokenType(tokenType, token)
+-- Checks if the given `token` (or `self.currentToken`) is of the specified `kind`.
+-- This is a generic check for any token kind (e.g., "Identifier", "Number", etc.).
+function Parser:checkTokenKind(kind, token)
   token = token or self.currentToken
-  return token and token.TYPE == tokenType
+  return token and token.kind == kind
 end
 
 -- Checks if the current token is a 'Keyword'
@@ -991,66 +992,66 @@ end
 function Parser:checkKeyword(keyword)
   local token = self.currentToken
   return token
-        and token.TYPE  == "Keyword"
-        and token.Value == keyword
+        and token.kind  == "Keyword"
+        and token.value == keyword
 end
 
 -- Checks if the current token is the comma character ','.
--- Used frequently in parsing lists (argument lists, variable lists, table elements).
+-- Used frequently in parsing lists (argument lists, variable lists, etc.).
 function Parser:isComma()
   local token = self.currentToken
-  return token and token.TYPE == "Comma"
+  return token and token.kind == "Comma"
 end
 
 -- Checks if the current token is a recognized unary operator.
--- Uses the `PARSER_LUA_UNARY_OPERATORS` lookup table.
+-- Uses the `self.CONFIG.UNARY_OPERATORS` lookup table.
 function Parser:isUnaryOperator()
   local token = self.currentToken
   return token
-        and (token.TYPE == "Operator" or token.TYPE == "Keyword")
-        and self.CONFIG.UNARY_OPERATORS[token.Value]
+        and (token.kind == "Operator" or token.kind == "Keyword")
+        and self.CONFIG.UNARY_OPERATORS[token.value]
 end
 
 -- Checks if the current token is a recognized binary operator.
--- Uses the `PARSER_LUA_BINARY_OPERATORS` lookup table.
+-- Uses the `self.CONFIG.BINARY_OPERATORS` lookup table.
 function Parser:isBinaryOperator()
   local token = self.currentToken
   return token
-        and (token.TYPE == "Operator" or token.TYPE == "Keyword")
-        and self.CONFIG.BINARY_OPERATORS[token.Value]
+        and (token.kind == "Operator" or token.kind == "Keyword")
+        and self.CONFIG.BINARY_OPERATORS[token.value]
 end
 
 --// Token Expectation //--
--- These functions check the current token's type or value without consuming it.
+-- These functions check the current token's kind or value without consuming it.
 -- Useful for making parsing decisions ("Is the next thing an identifier?").
 
--- Checks if the current token has the expected type. Throws an error otherwise.
-function Parser:expectTokenType(expectedType)
-  if self:checkTokenType(expectedType) then
+-- Checks if the current token has the expected kind. Throws an error otherwise.
+function Parser:expectTokenKind(expectedKind)
+  if self:checkTokenKind(expectedKind) then
     local previousToken = self.currentToken
-    self:consume(1) -- Advance to the next token
+    self:consume(1) -- Advance to the next token.
     return previousToken
   end
 
   -- No match? Syntax error.
-  local actualType = self.currentToken.TYPE
+  local actualKind = self.currentToken.kind
   self:error(
     string.format(
       "Expected a %s, but found %s",
-      tostring(expectedType),
-      tostring(actualType)
+      tostring(expectedKind),
+      tostring(actualKind)
     )
   )
 end
 
--- Checks if the current token is a 'Keyword' type with the expected value.
+-- Checks if the current token is a 'Keyword' kind with the expected value.
 -- Throws an error otherwise.
 function Parser:expectKeyword(keyword)
   local token = self.currentToken
 
-  -- Check if the current token is a keyword and matches the value
+  -- Check if the current token is a keyword and matches the value.
   if self:checkKeyword(keyword) then
-    self:consume(1) -- Advance to the next token
+    self:consume(1) -- Advance to the next token.
     return true
   end
 
@@ -1069,9 +1070,9 @@ end
 
 -- Checks if a given AST `node` is a valid target for the left-hand side of an assignment.
 -- Valid LValues are single variables or table access expressions.
--- Uses the `PARSER_LVALUE_NODE_TYPES` lookup table.
+-- Uses the `self.CONFIG.LVALUE_NODES` lookup table.
 function Parser:isValidAssignmentLvalue(node)
-  return node and self.CONFIG.LVALUE_NODES[node.TYPE]
+  return node and self.CONFIG.LVALUE_NODES[node.kind]
 end
 
 --// Parsers //--
@@ -1079,34 +1080,36 @@ end
 -- in the token stream and building the corresponding AST nodes.
 
 function Parser:consumeIdentifier()
-  local identifierValue = self:expectTokenType("Identifier").Value
+  local identifierValue = self:expectTokenKind("Identifier").value
   return identifierValue
 end
 
 function Parser:consumeVariable()
-  local variableName = self:expectTokenType("Identifier").Value
+  local variableName = self:expectTokenKind("Identifier").value
   local variableType = self:getVariableType(variableName)
 
-  return { TYPE = "Variable",
-    Name         = variableName,
-    VariableType = variableType
+  return { kind = "Variable",
+    name         = variableName,
+    variableType = variableType
   }
 end
 
 -- Parses a comma-separated list of identifiers.
--- Example: `a, b, c` -> returns `{"a", "b", "c"}`
 -- Consumes the identifier tokens and commas.
+-- Example: `a, b, c` -> returns `{"a", "b", "c"}`
 function Parser:consumeIdentifierList()
   local identifiers = {}
 
-  -- Loop as long as the current token is an identifier
-  while self.currentToken and self.currentToken.TYPE == "Identifier" do
-    -- Add the identifier's value (name) to the list
-    table.insert(identifiers, self.currentToken.Value)
-    self:consume(1) -- Consume the identifier token
-    -- Check if the current token is a comma. If not, the list ends after the current identifier.
+  -- Loop as long as the current token is an identifier.
+  while self.currentToken and self.currentToken.kind == "Identifier" do
+    -- Add the identifier's value (name) to the list.
+    table.insert(identifiers, self.currentToken.value)
+    self:consume(1) -- Consume the identifier token.
+
+    -- Check if the current token is a comma. If not, the list ends after
+    -- the current identifier.
     if not self:isComma() then break end
-    self:consume(1) -- Consume the comma and continue the loop
+    self:consume(1) -- Consume the comma and continue the loop.
   end
 
   return identifiers
@@ -1128,7 +1131,7 @@ function Parser:consumeParameters()
     -- Check for regular named parameters (must be identifiers)
     if self.currentToken.TYPE == "Identifier" then
       -- Add the parameter name to the list
-      table.insert(parameters, self.currentToken.Value)
+      table.insert(parameters, self.currentToken.value)
       self:consume(1) -- Consume the identifier token
 
     -- Check for the vararg token "..."
@@ -1142,7 +1145,7 @@ function Parser:consumeParameters()
     else
        self:error(
         "Expected parameter name or '...' in parameter list, but found: " ..
-        tostring(self.currentToken.TYPE)
+        tostring(self.currentToken.kind)
       )
     end
 
@@ -1164,28 +1167,30 @@ function Parser:consumeIndexExpression(currentExpression)
   local isPrecomputed = true
   local indexExpression
 
-  -- table.key syntax
-  if self:checkTokenType("Dot") then
-    self:consume(1) -- Consume the '.' character
+  -- table.key syntax.
+  if self:checkTokenKind("Dot") then
+    self:consume(1) -- Consume the '.' character.
     local identifier = self:consumeIdentifier()
-    indexExpression = { TYPE = "StringLiteral", Value = identifier }
+    indexExpression = { kind = "StringLiteral",
+      value = identifier
+    }
 
-  -- table["key"] syntax
+  -- table["key"] syntax.
   else
-    self:expectTokenType("LeftBracket") -- Expect and consume the '[' character
+    self:expectTokenKind("LeftBracket") -- Expect and consume the '[' character.
     indexExpression = self:consumeExpression()
     isPrecomputed   = false
     if not indexExpression then
       self:error("Expected an expression inside brackets for table index")
     end
-    self:expectTokenType("RightBracket")
+    self:expectTokenKind("RightBracket")
   end
 
   -- Create the AST node for the table index access.
-  return { TYPE = "IndexExpression",
-    Base          = currentExpression,
-    Index         = indexExpression,
-    IsPrecomputed = isPrecomputed
+  return { kind = "IndexExpression",
+    base          = currentExpression,
+    index         = indexExpression,
+    isPrecomputed = isPrecomputed
     -- NOTE: `IsPrecomputed` is not used in the compiler, it's present to make
     -- third-party tools easier to build (e.g., linters, formatters).
   }
@@ -1198,26 +1203,28 @@ function Parser:consumeTable()
   local tableElements      = {}
 
   -- Loop through tokens until we find the closing "}"
-  while self.currentToken and not self:checkTokenType("RightBrace") do
+  while self.currentToken and not self:checkTokenKind("RightBrace") do
     local key, value
     local isImplicitKey = false
 
-    -- Determine which type of table field we are parsing.
-    if self:checkTokenType("LeftBracket") then
+    -- Determine which kind of table field we are parsing.
+    if self:checkTokenKind("LeftBracket") then
       -- Explicit key in brackets, e.g., `[1+2] = "value"`.
       -- [<expression>] = <expression>
       self:consume(1) -- Consume "["
       key = self:consumeExpression()
-      self:expectTokenType("RightBracket")
-      self:expectTokenType("Equals")
+      self:expectTokenKind("RightBracket")
+      self:expectTokenKind("Equals")
       value = self:consumeExpression()
 
-    elseif self:checkTokenType("Identifier") and
-           self:checkTokenType("Equals", self:lookAhead(1)) then
-      -- Identifier key, e.g., `name = "value"`
+    elseif self:checkTokenKind("Identifier") and
+           self:checkTokenKind("Equals", self:lookAhead(1)) then
+      -- Identifier key, e.g., `name = "value"`.
       -- This is syntatic sugar for `["name"] = "value"`.
       -- <identifier> = <expression>
-      key = { TYPE  = "StringLiteral", Value = self.currentToken.Value }
+      key = { kind = "StringLiteral",
+        value = self.currentToken.value
+      }
       self:consume(1) -- Consume the identifier
       self:consume(1) -- Consume the "="
       value = self:consumeExpression()
@@ -1227,23 +1234,25 @@ function Parser:consumeTable()
       -- This is syntatic sugar for `[1] = "value1", [2] = MY_VAR, [3] = 42`.
       -- <expression>
       isImplicitKey = true
-      key = { TYPE = "NumericLiteral", Value = implicitKeyCounter }
+      key = { kind = "NumericLiteral",
+        value = implicitKeyCounter
+      }
       implicitKeyCounter = implicitKeyCounter + 1
       value = self:consumeExpression()
     end
 
     -- Create the AST node for this table element.
-    local element = { TYPE = "TableElement",
-      Key           = key,
-      Value         = value,
-      IsImplicitKey = isImplicitKey
+    local element = { kind = "TableElement",
+      key           = key,
+      value         = value,
+      isImplicitKey = isImplicitKey
     }
 
     table.insert(tableElements, element)
 
     -- Table elements can be separated by "," or ";". If no separator is
     -- found, we assume it's the end of the table definition.
-    if not (self:checkTokenType("Comma") or self:checkTokenType("Semicolon")) then
+    if not (self:checkTokenKind("Comma") or self:checkTokenKind("Semicolon")) then
       break
     end
     self:consume(1) -- Consume the separator.
@@ -1251,39 +1260,39 @@ function Parser:consumeTable()
 
   self:consumeToken("RightBrace") -- Consume the "}" symbol
 
-  return { TYPE = "TableConstructor",
-    Elements = tableElements
+  return { kind = "TableConstructor",
+    elements = tableElements
   }
 end
 
 function Parser:consumeFunctionCall(currentExpression, isMethodCall)
   local currentToken     = self.currentToken
-  local currentTokenType = currentToken.TYPE
+  local currentTokenKind = currentToken.kind
   local arguments
 
-  -- Explicit call with parentheses: `f(a, b)`
+  -- Explicit call with parentheses: `f(a, b)`.
   if currentTokenType == "LeftParen" then
     self:consume(1) -- Consume the left parenthesis '('
     arguments = self:consumeExpressions()
     self:consumeToken("RightParen") -- Expect and consume the right parenthesis ')'
 
   -- Implicit call with a string: `print "hello" `
-  elseif currentTokenType == "String" then
-    self:consume(1) -- Consume the string
+  elseif currentTokenKind == "String" then
+    self:consume(1) -- Consume the string.
     arguments = { {
-      TYPE  = "StringLiteral",
-      Value = currentToken.Value
+      kind  = "StringLiteral",
+      value = currentToken.value
     } }
 
   -- Implicit call with a table: `f {1, 2, 3} `
-  elseif currentTokenType == "LeftBrace" then
+  elseif currentTokenKind == "LeftBrace" then
     arguments = { self:consumeTable() }
   end
 
-  return { TYPE = "FunctionCall",
-    Callee       = currentExpression,
-    Arguments    = arguments,
-    IsMethodCall = isMethodCall and true,
+  return { kind = "FunctionCall",
+    callee       = currentExpression,
+    arguments    = arguments,
+    isMethodCall = isMethodCall and true,
   }
 end
 
@@ -1293,9 +1302,11 @@ function Parser:consumeMethodCall(currentExpression)
 
   -- Convert the `table:method` part to an AST node
   local methodIndexNode = {
-    TYPE = "IndexExpression",
-    Base = currentExpression,
-    Index = { TYPE = "StringLiteral", Value = methodName },
+    kind = "IndexExpression",
+    base = currentExpression,
+    index = { kind = "StringLiteral",
+      value = methodName
+    },
   }
 
   -- Consume the function call and mark it as a method call
@@ -1303,7 +1314,7 @@ function Parser:consumeMethodCall(currentExpression)
 end
 
 function Parser:consumeOptionalSemicolon()
-  if self:checkTokenType("Semicolon") then
+  if self:checkTokenKind("Semicolon") then
     self:consume(1)
   end
 end
@@ -1313,28 +1324,28 @@ function Parser:parsePrimaryExpression()
   local currentToken = self.currentToken
   if not currentToken then return end
 
-  local tokenType  = currentToken.TYPE
-  local tokenValue = currentToken.Value
+  local tokenKind  = currentToken.kind
+  local tokenValue = currentToken.value
 
-  if tokenType == "Number" then
+  if tokenKind == "Number" then
     self:consume(1)
-    return { TYPE = "NumericLiteral", Value = tokenValue }
-  elseif tokenType == "String" then
+    return { kind = "NumericLiteral", value = tokenValue }
+  elseif tokenKind == "String" then
     self:consume(1)
-    return { TYPE = "StringLiteral", Value = tokenValue }
-  elseif tokenType == "Vararg" then
+    return { kind = "StringLiteral", value = tokenValue }
+  elseif tokenKind == "Vararg" then
     self:consume(1)
-    return { TYPE = "VarargExpression" }
-  elseif tokenType == "Keyword" then
+    return { kind = "VarargExpression" }
+  elseif tokenKind == "Keyword" then
     -- Nil literal: `nil`.
     if tokenValue == "nil" then
       self:consume(1) -- Consume 'nil'.
-      return { TYPE = "NilLiteral" }
+      return { kind = "NilLiteral" }
 
     -- Boolean literals: `true` or `false`.
     elseif tokenValue == "true" or tokenValue == "false" then
       self:consume(1) -- Consume 'true' or 'false'.
-      return { TYPE = "BooleanLiteral", Value = (tokenValue == "true") }
+      return { kind = "BooleanLiteral", value = (tokenValue == "true") }
 
     -- Anonymous function, e.g., `function(arg1) ... end`.
     elseif tokenValue == "function" then
@@ -1342,22 +1353,22 @@ function Parser:parsePrimaryExpression()
       local parameters, isVararg = self:consumeParameters()
       local body = self:parseCodeBlock(true, parameters)
       self:expectKeyword("end")
-      return { TYPE = "FunctionExpression",
-        Body       = body,
-        Parameters = parameters,
-        IsVararg   = isVararg
+      return { kind = "FunctionExpression",
+        body       = body,
+        parameters = parameters,
+        isVararg   = isVararg
       }
     end
 
   -- Variable, e.g., `MY_VAR`.
-  elseif tokenType == "Identifier" then
+  elseif tokenKind == "Identifier" then
     return self:consumeVariable()
 
   -- Parenthesized expression, e.g., `(a + b)`.
-  elseif tokenType == "LeftParen" then
+  elseif tokenKind == "LeftParen" then
     self:consume(1) -- Consume '('
     local expression = self:consumeExpression()
-    self:expectTokenType("RightParen") -- Expect and consume ')'
+    self:expectTokenKind("RightParen") -- Expect and consume ')'.
     if not expression then
       self:error("Expected an expression inside parentheses")
     end
@@ -1366,12 +1377,12 @@ function Parser:parsePrimaryExpression()
     -- In Lua, parentheses also force a multi-return expression to adjust to
     -- a single value. e.g., `a, b = f()` is different from `a, b = (f())`.
     -- Therefore, we must keep this wrapper node in the AST.
-    return { TYPE = "ParenthesizedExpression",
-      Expression = expression
+    return { kind = "ParenthesizedExpression",
+      expression = expression
     }
 
-  -- Table constructor, e.g., `{ 42, "string", ["my"] = variable }`
-  elseif tokenType == "LeftBrace" then
+  -- Table constructor, e.g., `{ 42, "string", ["my"] = variable }`.
+  elseif tokenKind == "LeftBrace" then
     return self:consumeTable()
   end
 
@@ -1388,21 +1399,25 @@ function Parser:parsePrefixExpression()
     local currentToken = self.currentToken
     if not currentToken then break end
 
-    local currentTokenType = currentToken.TYPE
-    if currentTokenType == "LeftParen" then -- Function call
+    local currentTokenKind = currentToken.TYPE
+    if currentTokenKind == "LeftParen" then
       -- <expression>(<args>)
       primaryExpression = self:consumeFunctionCall(primaryExpression, false)
 
       -- NOTE: In Lua, a function call may be considered ambiguous
       -- without a semicolon, which will throw an error.
       -- TLC does not enforce this as the Parser does not have line/column info.
-    elseif currentTokenType == "Dot" or currentTokenType == "LeftBracket" then -- Table access
+    elseif currentTokenKind == "Dot" or currentTokenKind == "LeftBracket" then
       -- <expression>.<identifier> | <expression>[<expr>]
       primaryExpression = self:consumeIndexExpression(primaryExpression)
-    elseif currentTokenType == "Colon" then -- Method call
+
+    -- Method call.
+    elseif currentTokenKind == "Colon" then
       -- <expression>:<identifier>(<args>)
       primaryExpression = self:consumeMethodCall(primaryExpression)
-    elseif currentTokenType == "String" or currentTokenType == "LeftBrace" then -- Implicit function call
+
+    -- Implicit function call.
+    elseif currentTokenKind == "String" or currentTokenKind == "LeftBrace" then
       -- <expression><string> | <expression><table_constructor>
       -- In some edge cases, a user may call a function using only string,
       -- example: `print "Hello, World!"`. This is a valid Lua syntax.
@@ -1428,9 +1443,9 @@ function Parser:parseUnaryOperator()
   local expression = self:parseBinaryExpression(self.CONFIG.UNARY_PRECEDENCE)
   if not expression then self:error("Unexpected end") end
 
-  return { TYPE = "UnaryOperator",
-    Operator = operator.Value,
-    Operand  = expression
+  return { kind = "UnaryOperator",
+    operator = operator.value,
+    operand  = expression
   }
 end
 
@@ -1454,10 +1469,10 @@ function Parser:parseBinaryExpression(minPrecedence)
     local right = self:parseBinaryExpression(precedence[2])
     if not right then self:error("Unexpected end") end
 
-    expression = { TYPE = "BinaryOperator",
-      Operator = operatorToken.Value,
-      Left     = expression,
-      Right    = right
+    expression = { kind = "BinaryOperator",
+      operator = operatorToken.value,
+      left     = expression,
+      right    = right
     }
   end
 
@@ -1498,13 +1513,13 @@ function Parser:parseLocalStatement()
     self:declareLocalVariable(functionName)
     local body = self:parseCodeBlock(true, parameters)
     self:expectKeyword("end")
-    return { TYPE = "LocalFunctionDeclaration",
-      Name = functionName,
-      Body = {
-        TYPE       = "FunctionExpression",
-        Body       = body,
-        Parameters = parameters,
-        IsVararg   = isVararg
+    return { kind = "LocalFunctionDeclaration",
+      name = functionName,
+      body = {
+        kind       = "FunctionExpression",
+        body       = body,
+        parameters = parameters,
+        isVararg   = isVararg
       }
     }
   else
@@ -1513,15 +1528,15 @@ function Parser:parseLocalStatement()
     local initializers = {}
 
     -- Check for optional expressions.
-    if self:checkTokenType("Equals") then
+    if self:checkTokenKind("Equals") then
       self:consume(1)
       initializers = self:consumeExpressions()
     end
 
     self:declareLocalVariables(variables)
-    return { TYPE = "LocalDeclarationStatement",
-      Variables    = variables,
-      Initializers = initializers
+    return { kind = "LocalDeclarationStatement",
+      variables    = variables,
+      initializers = initializers
     }
   end
 end
@@ -1534,9 +1549,9 @@ function Parser:parseWhileStatement()
   local body = self:parseCodeBlock()
   self:expectKeyword("end")
 
-  return { TYPE = "WhileStatement",
-    Condition = condition,
-    Body      = body
+  return { kind = "WhileStatement",
+    condition = condition,
+    body      = body
   }
 end
 
@@ -1555,9 +1570,9 @@ function Parser:parseRepeatStatement()
   local condition = self:consumeExpression()
   self:exitScope()
 
-  return { TYPE = "RepeatStatement",
-    Body      = body,
-    Condition = condition
+  return { kind = "RepeatStatement",
+    body      = body,
+    condition = condition
   }
 end
 
@@ -1567,7 +1582,9 @@ function Parser:parseDoStatement()
   local body = self:parseCodeBlock()
   self:expectKeyword("end")
 
-  return { TYPE = "DoStatement", Body = body }
+  return { kind = "DoStatement",
+    body = body
+  }
 end
 
 function Parser:parseReturnStatement()
@@ -1575,13 +1592,15 @@ function Parser:parseReturnStatement()
   self:consumeToken("Keyword", "return")
   local expressions = self:consumeExpressions()
 
-  return { TYPE = "ReturnStatement", Expressions = expressions }
+  return { kind = "ReturnStatement",
+    expressions = expressions
+  }
 end
 
 function Parser:parseBreakStatement()
   -- break
   self:consumeToken("Keyword", "break")
-  return { TYPE = "BreakStatement" }
+  return { kind = "BreakStatement" }
 end
 
 function Parser:parseIfStatement()
@@ -1597,9 +1616,9 @@ function Parser:parseIfStatement()
   local ifBody = self:parseCodeBlock()
   local clauses = {
     -- First branch: the initial "if"
-    { TYPE = "IfClause",
-      Condition = ifCondition,
-      Body      = ifBody
+    { kind = "IfClause",
+      condition = ifCondition,
+      body      = ifBody
     }
   }
 
@@ -1612,9 +1631,9 @@ function Parser:parseIfStatement()
     local body = self:parseCodeBlock()
 
     -- elseif <condition_expr> then <body>
-    local ifClause = { TYPE = "IfClause",
-      Condition = condition,
-      Body      = body
+    local ifClause = { kind = "IfClause",
+      condition = condition,
+      body      = body
     }
     table.insert(clauses, ifClause)
   end
@@ -1627,9 +1646,9 @@ function Parser:parseIfStatement()
   end
   self:expectKeyword("end")
 
-  return { TYPE = "IfStatement",
-    Clauses    = clauses,
-    ElseClause = elseClause
+  return { kind = "IfStatement",
+    clauses    = clauses,
+    elseClause = elseClause
   }
 end
 
@@ -1642,14 +1661,14 @@ function Parser:parseForStatement()
   -- At this point, we must distinguish between a generic `for` loop
   -- (e.g., `for i, v in pairs(t)`) and a numeric `for` loop `(e.g., `for i = 1, 10`).
   -- The presence of a comma or the `in` keyword signals a generic loop.
-  if self:checkTokenType("Comma") or self:checkKeyword("in") then
+  if self:checkTokenKind("Comma") or self:checkKeyword("in") then
     -- It's a generic 'for' loop: `for var1, var2, ... in expr1, expr2, ... do ... end`.
     -- Even though the generic for loop allows infinite expressions after `in`,
     -- the Lua VM only uses the first three (the generator, state, and control).
 
     -- Parse the list of iterator variables.
     local iteratorVariables = { variableName }
-    while self:checkTokenType("Comma") do
+    while self:checkTokenKind("Comma") do
       self:consumeToken("Comma")
       local newVariableName = self:consumeIdentifier()
       table.insert(iteratorVariables, newVariableName)
@@ -1664,10 +1683,10 @@ function Parser:parseForStatement()
     local body = self:parseCodeBlock(false, iteratorVariables)
     self:expectKeyword("end")
 
-    return { TYPE = "ForGenericStatement",
-      Iterators   = iteratorVariables,
-      Expressions = expressions,
-      Body        = body
+    return { kind = "ForGenericStatement",
+      iterators   = iteratorVariables,
+      expressions = expressions,
+      body        = body
     }
   end
 
@@ -1689,13 +1708,12 @@ function Parser:parseForStatement()
   local body = self:parseCodeBlock(false, { variableName })
   self:expectKeyword("end")
 
-  return {
-    TYPE     = "ForNumericStatement",
-    Variable = variableName,
-    Start    = startExpr,
-    End      = limitExpr,
-    Step     = stepExpr,
-    Body     = body
+  return { kind = "ForNumericStatement",
+    variable = variableName,
+    start    = startExpr,
+    limit    = limitExpr,
+    step     = stepExpr,
+    body     = body
   }
 end
 
@@ -1709,19 +1727,21 @@ function Parser:parseFunctionDeclaration()
   -- This loop handles `.field` and `:method` parts
   local isMethodDeclaration = false
   while self.currentToken do
-    local isDot   = self:checkTokenType("Dot")
-    local isColon = self:checkTokenType("Colon")
+    local isDot   = self:checkTokenKind("Dot")
+    local isColon = self:checkTokenKind("Colon")
 
     if not (isDot or isColon) then
       break -- The name chain has ended.
     end
 
-    self:consume(1) -- Consume the `.` or `:`
+    self:consume(1) -- Consume the `.` or `:`.
     local fieldName = self:consumeIdentifier()
     expression = {
-      TYPE  = "IndexExpression",
-      Base  = expression,
-      Index = { TYPE  = "StringLiteral", Value = fieldName }
+      kind  = "IndexExpression",
+      base  = expression,
+      index = { kind = "StringLiteral",
+        value = fieldName
+      }
     }
 
     if isColon then
@@ -1741,19 +1761,19 @@ function Parser:parseFunctionDeclaration()
   local body = self:parseCodeBlock(true, parameters)
   self:expectKeyword("end")
 
-  -- Instead of having a separate node type for non-local function declarations,
+  -- Instead of having a separate node kind for non-local function declarations,
   -- we use a "AssignmentStatement" node that assigns a "Function" node to a variable or table index.
   -- Behaviorally, `function <name>[.<field>]*[:<method>](<params>) <body> end` is equivalent to
   -- `<name>[.<field>]*[.method] = function([self,] <params>) <body> end`.
   -- This will make the code generator much smaller and simpler.
   return {
-    TYPE    = "AssignmentStatement",
-    LValues = { expression },
-    Expressions = { {
-      TYPE       = "FunctionExpression",
-      Body       = body,
-      Parameters = parameters,
-      IsVararg   = isVararg
+    kind    = "AssignmentStatement",
+    lvalues = { expression },
+    expressions = { {
+      kind       = "FunctionExpression",
+      body       = body,
+      parameters = parameters,
+      isVararg   = isVararg
     } }
   }
 end
@@ -1773,20 +1793,20 @@ function Parser:parseAssignment(lvalue)
     -- Validate that what we parsed is actually a valid assignment target.
     if not self:isValidAssignmentLvalue(nextLValue) then
       self:error("Invalid assignment target: expected variable or table index, got " ..
-                 tostring(nextLValue and nextLValue.TYPE or "nil"))
+                 tostring(nextLValue and nextLValue.kind or "nil"))
     end
 
     table.insert(lvalues, nextLValue)
   end
 
   -- Now that we have all the lvalues, we expect the `=` sign.
-  self:expectTokenType("Equals")
+  self:expectTokenKind("Equals")
   local expressions = self:consumeExpressions()
 
   return {
-    TYPE        = "AssignmentStatement",
-    LValues     = lvalues,
-    Expressions = expressions
+    kind        = "AssignmentStatement",
+    lvalues     = lvalues,
+    expressions = expressions
   }
 end
 
@@ -1806,9 +1826,9 @@ function Parser:parseFunctionCallOrAssignmentStatement()
 
   -- Check if it's a function call statement (e.g., `myFunc()`).
   --- @diagnostic disable-next-line: need-check-nil
-  if expression.TYPE == "FunctionCall" then
-    return { TYPE = "CallStatement",
-      Expression = expression
+  if expression.kind == "FunctionCall" then
+    return { kind = "CallStatement",
+      expression = expression
     }
   end
 
@@ -1822,7 +1842,7 @@ function Parser:parseFunctionCallOrAssignmentStatement()
   -- If we reach here, the expression is not a valid statement.
   -- For example, a line like `x + 1` is a valid expression but not a valid statement.
   --- @diagnostic disable-next-line: need-check-nil
-  self:error("Invalid statement: syntax error near '" .. expression.TYPE ..
+  self:error("Invalid statement: syntax error near '" .. expression.kind ..
              "'. Only function calls and assignments can be statements.")
 end
 
@@ -1833,8 +1853,8 @@ end
 -- function to call based on the current token.
 function Parser:getNextNode()
   local node
-  if self:checkTokenType("Keyword") then
-    local keyword = self.currentToken.Value
+  if self:checkTokenKind("Keyword") then
+    local keyword = self.currentToken.value
 
     -- First, check for keywords that terminate a block. If found, we stop
     -- parsing this block and let the parent parser handle the keyword.
@@ -1867,8 +1887,8 @@ end
 -- local variables defined inside `repeat-until` statement can still be
 -- used in the `until`s expression.
 function Parser:parseCodeBlockInCurrentScope()
-  local node = { TYPE = "Block", Statements = {} }
-  local nodeList = node.Statements
+  local node = { kind = "Block", statements = {} }
+  local nodeList = node.statements
 
   while self.currentToken do
     -- Parse statements one by one until a terminator is found.
@@ -1904,8 +1924,8 @@ function Parser:parse()
   local blockNode = self:parseCodeBlock()
 
   return {
-    TYPE = "Program",
-    Body = blockNode
+    kind = "Program",
+    body = blockNode
   }
 end
 
@@ -1998,7 +2018,7 @@ CodeGenerator.CONFIG = {
 function CodeGenerator.new(ast)
   --// Asserting //
   assert(type(ast) == "table", "Expected 'ast' argument to be a table, got: " .. type(ast))
-  assert(ast.TYPE == "Program", "Expected 'ast' to be a 'Program' node, got: " .. ast.TYPE)
+  assert(ast.kind == "Program", "Expected 'ast' to be a 'Program' node, got: " .. ast.kind)
 
   --// Initialization //
   local self = setmetatable({}, CodeGenerator)
@@ -2293,7 +2313,7 @@ function CodeGenerator:getUpvalueType(variableName)
 end
 
 function CodeGenerator:isMultiReturnNode(node)
-  return node and self.CONFIG.MULTIRET_NODES[node.TYPE]
+  return node and self.CONFIG.MULTIRET_NODES[node.kind]
 end
 
 function CodeGenerator:isMultiReturnList(expressions)
@@ -2307,7 +2327,7 @@ function CodeGenerator:isTailCall(expressions)
   if #expressions ~= 1 then return false end
 
   local expression = expressions[1]
-  return expression.TYPE == "FunctionCall"
+  return expression.kind == "FunctionCall"
 end
 
 -- Splits table's elements into implicit and explicit ones.
@@ -2315,7 +2335,7 @@ function CodeGenerator:splitTableElements(elements)
   local implicitElems = {}
   local explicitElems = {}
   for _, element in ipairs(elements) do
-    if element.IsImplicitKey then
+    if element.isImplicitKey then
       table.insert(implicitElems, element)
     else
       table.insert(explicitElems, element)
@@ -2328,10 +2348,10 @@ end
 -- Used in methods like `processAssignmentStatement` to set
 -- the value of a register to another register's value.
 function CodeGenerator:setRegisterValue(node, copyFromRegister)
-  local nodeType = node.TYPE
+  local nodeKind = node.kind
 
-  if nodeType == "Variable" then
-    local variableType = node.VariableType
+  if nodeKind == "Variable" then
+    local variableType = node.variableType
     local variableName = node.Name
     if variableType == "Local" then
       local variableRegister = self:findVariableRegister(variableName)
@@ -2345,9 +2365,9 @@ function CodeGenerator:setRegisterValue(node, copyFromRegister)
       self:emitInstruction("SETGLOBAL", copyFromRegister, self:findOrCreateConstant(variableName))
     end
     return
-  elseif nodeType == "IndexExpression" then
-    local baseNode  = node.Base
-    local indexNode = node.Index
+  elseif nodeKind == "IndexExpression" then
+    local baseNode  = node.base
+    local indexNode = node.index
 
     local baseRegister  = self:processConstantOrExpression(baseNode)
     local indexRegister = self:processConstantOrExpression(indexNode)
@@ -2360,7 +2380,7 @@ function CodeGenerator:setRegisterValue(node, copyFromRegister)
     return
   end
 
-  error("Compiler: Unsupported lvalue type in setRegisterValue: " .. nodeType)
+  error("CodeGenerator: Unsupported lvalue kind in setRegisterValue: " .. nodeKind)
 end
 
 -- TODO: Make it much cleaner
@@ -2410,38 +2430,38 @@ end
 
 -- Generic processor for both string and numeric literals.
 function CodeGenerator:processLiteral(node, register)
-  local nodeType = node.TYPE
-  if nodeType == "NilLiteral" then
+  local nodeKind = node.kind
+  if nodeKind == "NilLiteral" then
 
     -- OP_LOADNIL [A, B]    R(A) := ... := R(B) := nil
     self:emitInstruction("LOADNIL", register, register, 0)
-  elseif nodeType == "BooleanLiteral" then
-    local value = (node.Value and 1) or 0
+  elseif nodeKind == "BooleanLiteral" then
+    local value = (node.value and 1) or 0
 
     -- OP_LOADBOOL [A, B, C]    R(A) := (Bool)B; if (C) pc++
     self:emitInstruction("LOADBOOL", register, value, 0)
-  elseif nodeType == "NumericLiteral" or nodeType == "StringLiteral" then
-    local value         = node.Value
+  elseif nodeKind == "NumericLiteral" or nodeKind == "StringLiteral" then
+    local value         = node.value
     local constantIndex = self:findOrCreateConstant(value)
 
     -- OP_LOADK [A, Bx]    R(A) = Kst(Bx)
     self:emitInstruction("LOADK", register, constantIndex, 0)
   else
-    error("Compiler: Unsupported literal type: " .. tostring(nodeType))
+    error("CodeGenerator: Unsupported literal type: " .. tostring(nodeKind))
   end
 
   return register
 end
 
 function CodeGenerator:processParenthesizedExpression(node, register)
-  local expression = node.Expression
+  local expression = node.expression
   return self:processExpressionNode(expression, register)
 end
 
 function CodeGenerator:processBinaryOperator(node, register)
-  local operator = node.Operator
-  local left     = node.Left
-  local right    = node.Right
+  local operator = node.operator
+  local left     = node.left
+  local right    = node.right
 
   -- Simple arithmetic operators (+, -, /, *, %, ^)
   if self.CONFIG.ARITHMETIC_OPERATOR_LOOKUP[operator] then
@@ -2507,7 +2527,7 @@ end
 
 function CodeGenerator:processUnaryOperator(node, register)
   local operator = node.Operator
-  local operand  = node.Operand
+  local operand  = node.operand
   local opname   = self.CONFIG.UNARY_OPERATOR_LOOKUP[operator]
 
   -- TODO: Allocate a new register?
@@ -2519,8 +2539,8 @@ end
 
 -- TODO: Make this function less messy.
 function CodeGenerator:processTableConstructor(node, register)
-  local elements    = node.Elements
-  local lastElement = node.Elements[#node.Elements]
+  local elements    = node.elements
+  local lastElement = node.elements[#node.elements]
   local isLastElementImplicit = lastElement and lastElement.IsImplicitKey
   local implicitElems, explicitElems = self:splitTableElements(elements)
 
@@ -2532,8 +2552,8 @@ function CodeGenerator:processTableConstructor(node, register)
   self:emitInstruction("NEWTABLE", register, sizeB, sizeC)
 
   for _, elem in ipairs(explicitElems) do
-    local keyRegister   = self:processExpressionNode(elem.Key)
-    local valueRegister = self:processExpressionNode(elem.Value)
+    local keyRegister   = self:processExpressionNode(elem.key)
+    local valueRegister = self:processExpressionNode(elem.value)
 
     -- OP_SETTABLE [A, B, C]    R(A)[R(B)] := R(C)
     self:emitInstruction("SETTABLE", register, keyRegister, valueRegister)
@@ -2555,8 +2575,8 @@ function CodeGenerator:processTableConstructor(node, register)
 end
 
 function CodeGenerator:processVariable(node, register)
-  local varName = node.Name
-  local varType = node.VariableType -- "Local" / "Upvalue" / "Global"
+  local varName = node.name
+  local varType = node.variableType -- "Local" / "Upvalue" / "Global"
 
   if varType == "Local" then
     local variable = self:findVariableRegister(varName)
@@ -2579,13 +2599,13 @@ function CodeGenerator:processVariable(node, register)
 end
 
 function CodeGenerator:processFunctionCall(node, register, resultRegisters)
-  local callee       = node.Callee
-  local arguments    = node.Arguments
-  local isMethodCall = node.IsMethodCall
+  local callee       = node.callee
+  local arguments    = node.arguments
+  local isMethodCall = node.isMethodCall
 
   if isMethodCall then
-    local calleeExpressionIndex = callee.Index
-    local calleeExpressionBase  = callee.Base
+    local calleeExpressionIndex = callee.index
+    local calleeExpressionBase  = callee.base
 
     self:processExpressionNode(calleeExpressionBase, register)
     self:allocateRegister() -- Used for `self` arg, will get free'd later.
@@ -2632,8 +2652,8 @@ function CodeGenerator:processFunctionExpression(node, register)
 end
 
 function CodeGenerator:processIndexExpression(node, register)
-  local baseNode  = node.Base
-  local indexNode = node.Index
+  local baseNode  = node.base
+  local indexNode = node.index
 
   local baseRegister  = self:processExpressionNode(baseNode, register)
   local indexRegister = self:processConstantOrExpression(indexNode)
@@ -2672,8 +2692,8 @@ function CodeGenerator:processBreakStatement(_)
 end
 
 function CodeGenerator:processLocalDeclarationStatement(node)
-  local variables    = node.Variables
-  local initializers = node.Initializers
+  local variables    = node.variables
+  local initializers = node.initializers
 
   local variableBaseRegister = self.stackSize - 1
   self:processExpressionList(initializers, #variables)
@@ -2685,15 +2705,15 @@ function CodeGenerator:processLocalDeclarationStatement(node)
 end
 
 function CodeGenerator:processLocalFunctionDeclaration(node)
-  local functionName = node.Name
-  local body         = node.Body
+  local functionName = node.name
+  local body         = node.body
 
   local variableRegister = self:declareLocalVariable(functionName)
   self:processFunction(body, variableRegister)
 end
 
 function CodeGenerator:processAssignmentStatement(node)
-  local lvalues     = node.LValues
+  local lvalues     = node.lvalues
   local expressions = node.Expressions
 
   local variableBaseRegister = self.stackSize - 1
@@ -2708,16 +2728,16 @@ function CodeGenerator:processAssignmentStatement(node)
 end
 
 function CodeGenerator:processIfStatement(node)
-  local clauses    = node.Clauses
-  local elseClause = node.ElseClause
+  local clauses    = node.clauses
+  local elseClause = node.elseClause
 
   local jumpToEndPCs   = {}
   local lastClause     = clauses[#clauses]
   local previousJumpPC = nil
 
   for _, clause in ipairs(clauses) do
-    local condition = clause.Condition
-    local body      = clause.Body
+    local condition = clause.condition
+    local body      = clause.body
 
     local conditionRegister = self:processExpressionNode(condition)
     self:emitInstruction("TEST", conditionRegister, 0, 0)
@@ -2742,9 +2762,9 @@ function CodeGenerator:processIfStatement(node)
 end
 
 function CodeGenerator:processForGenericStatement(node)
-  local iterators   = node.Iterators
-  local expressions = node.Expressions
-  local body        = node.Body
+  local iterators   = node.iterators
+  local expressions = node.expressions
+  local body        = node.body
 
   local baseStackSize = self.stackSize
   local expressionRegisters = self:processExpressionList(expressions, 3)
@@ -2766,15 +2786,15 @@ function CodeGenerator:processForGenericStatement(node)
 end
 
 function CodeGenerator:processForNumericStatement(node)
-  local varName   = node.Variable
-  local startExpr = node.Start
-  local endExpr   = node.End
-  local stepExpr  = node.Step
-  local body      = node.Body
+  local varName   = node.variable
+  local startExpr = node.start
+  local limitExpr = node.limit
+  local stepExpr  = node.step
+  local body      = node.body
 
   local startRegister = self:processExpressionNode(startExpr)
-  self:processExpressionNode(endExpr)
-  local stepRegister = self:allocateRegister()
+  self:processExpressionNode(limitExpr)
+  local stepRegister = self:allocateRegisters(1)
   if stepExpr then
     self:processExpressionNode(stepExpr, stepRegister)
   else
@@ -2801,8 +2821,8 @@ function CodeGenerator:processForNumericStatement(node)
 end
 
 function CodeGenerator:processWhileStatement(node)
-  local condition = node.Condition
-  local body      = node.Body
+  local condition = node.condition
+  local body      = node.body
 
   local startPC = #self.proto.code
   local conditionRegister = self:processExpressionNode(condition)
@@ -2818,14 +2838,14 @@ function CodeGenerator:processWhileStatement(node)
 end
 
 function CodeGenerator:processRepeatStatement(node)
-  local body      = node.Body
-  local condition = node.Condition
+  local body        = node.body
+  local condition   = node.condition
   local loopStartPC = #self.proto.code
 
   -- NOTE: Repeat statements' body and condition are in the same scope.
   self:enterScope()
   self:breakable(function()
-    self:processStatementList(body.Statements)
+    self:processStatementList(body.statements)
     local conditionRegister = self:processExpressionNode(condition)
 
     -- OP_TEST [A, C]    if not (R(A) <=> C) then pc++
@@ -2837,7 +2857,7 @@ function CodeGenerator:processRepeatStatement(node)
 end
 
 function CodeGenerator:processReturnStatement(node)
-  local expressions    = node.Expressions
+  local expressions      = node.expressions
   local resultRegister = self.stackSize
   local lastExpression = expressions[#expressions]
   local isTailcall     = self:isTailCall(expressions)
@@ -2879,13 +2899,13 @@ end
 --                    (used for function calls/varargs).
 function CodeGenerator:processExpressionNode(node, register, resultRegisters)
   if not node then error("Node not found.") end
-  register = register or self:allocateRegister()
+  register = register or self:allocateRegisters(1)
 
-  local nodeType = node.TYPE
-  local handler  = self.CONFIG.EXPRESSION_HANDLERS[nodeType]
+  local nodeKind = node.kind
+  local handler  = self.CONFIG.EXPRESSION_HANDLERS[nodeKind]
   local func     = self[handler]
   if not func then
-    error("Compiler: Expression node type not supported: " .. nodeType)
+    error("CodeGenerator: Expression node kind not supported: " .. nodeKind)
   end
 
   return func(self, node, register, resultRegisters)
@@ -2894,11 +2914,11 @@ end
 function CodeGenerator:processStatementNode(node)
   if not node then error("Node not found.") end
 
-  local nodeType = node.TYPE
-  local handler  = self.CONFIG.STATEMENT_HANDLERS[nodeType]
+  local nodeKind = node.kind
+  local handler  = self.CONFIG.STATEMENT_HANDLERS[nodeKind]
   local func     = self[handler]
   if not func then
-    error("Compiler: Statement node type not supported: " .. nodeType)
+    error("CodeGenerator: Statement node kind not supported: " .. nodeKind)
   end
 
   return func(self, node)
@@ -2996,22 +3016,22 @@ end
 
 function CodeGenerator:processBlockNode(blockNode)
   self:enterScope()
-  self:processStatementList(blockNode.Statements)
+  self:processStatementList(blockNode.statements)
   self:leaveScope()
 end
 
 function CodeGenerator:processFunctionBody(node)
   self:enterScope(true)
-  for _, paramName in ipairs(node.Parameters) do
+  for _, paramName in ipairs(node.parameters) do
     self:declareLocalVariable(paramName)
   end
 
-  if node.IsVararg then
+  if node.isVararg then
     -- Declare implicit "arg" variable to hold vararg values.
     self:declareLocalVariable("arg")
   end
 
-  self:processStatementList(node.Body.Statements)
+  self:processStatementList(node.body.statements)
   -- Generate default return statement.
   self:emitInstruction("RETURN", 0, 1, 0)
   self:leaveScope()
@@ -3053,8 +3073,8 @@ end
 function CodeGenerator:processFunction(functionNode, closureRegister)
   local parentProto = self.proto
   local childProto  = self:emitPrototype({
-    isVararg  = functionNode.IsVararg,
-    numParams = #functionNode.Parameters,
+    isVararg  = functionNode.isVararg,
+    numParams = #functionNode.parameters,
   })
   self.proto = childProto
   self:processFunctionBody(functionNode)
@@ -3071,9 +3091,9 @@ end
 
 function CodeGenerator:generate()
   return self:processFunction({
-    Body       = self.ast.Body,
-    Parameters = {},
-    IsVararg   = true -- The main chunk is always vararg.
+    body       = self.ast.body,
+    parameters = {},
+    isVararg   = true -- The main chunk is always vararg.
                       -- (used for command-line arguments)
   })
 end
