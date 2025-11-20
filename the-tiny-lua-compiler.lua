@@ -4186,11 +4186,11 @@ end
 
 -- Now I'm just exporting everything...
 return {
-  Tokenizer      = Tokenizer,
-  Parser         = Parser,
-  CodeGenerator  = CodeGenerator,
+  Tokenizer       = Tokenizer,
+  Parser          = Parser,
+  CodeGenerator   = CodeGenerator,
   BytecodeEmitter = BytecodeEmitter,
-  VirtualMachine = VirtualMachine,
+  VirtualMachine  = VirtualMachine,
 
   -- Shortcuts for convenience.
   -- It is highly recommended to use these shortcut functions for all tasks!
@@ -4208,5 +4208,15 @@ return {
     local bytecode = BytecodeEmitter.new(proto):emit()
 
     return bytecode
+  end,
+  compileAndRun = function(code)
+    assert(type(code) == "string", "Expected a string for 'code', got " .. type(code))
+
+    local tokens = Tokenizer.new(code):tokenize()
+    local ast    = Parser.new(tokens):parse()
+    local proto  = CodeGenerator.new(ast):generate()
+
+    local vm = VirtualMachine.new(proto)
+    return vm:execute()
   end
 }
