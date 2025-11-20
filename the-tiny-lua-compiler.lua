@@ -3090,13 +3090,12 @@ end
 
 --[[
   ============================================================================
-                                   (۶* ‘ヮ’)۶”
-                          !!!!!!!!THE COMPILER!!!!!!!!
+                            (۶* ‘ヮ’)۶”
+                          !!!!!!!!THE BYTECODE EMITTER!!!!!!!!
   ============================================================================
 
-  The final part of the compiler is the compiler itself (duh). The
-  compiler is responsible for converting the given Lua Function Prototypes
-  into Lua bytecode. The compiler will implement binary writing logic
+  The bytecode emitter is responsible for converting the given Lua Function Prototypes
+  into Lua bytecode. The bytecode emitter will implement binary writing logic
   to write the bytecode to a file, which can then be executed by the
   Lua Virtual Machine (VM).
 --]]
@@ -3127,10 +3126,10 @@ local MODE_iAsBx = 2
 
 
 -- Operand types
-local OpArgN = 0 -- Argument is not used
-local OpArgU = 1 -- Argument is used
-local OpArgR = 2 -- Argument is a register or a jump offset
-local OpArgK = 3 -- Argument is a constant or register/constant
+local OP_ARG_N = 0 -- Argument is not used
+local OP_ARG_U = 1 -- Argument is used
+local OP_ARG_R = 2 -- Argument is a register or a jump offset
+local OP_ARG_K = 3 -- Argument is a constant or register/constant
 
 -- Function Header Flags
 local VARARG_NONE     = 0
@@ -3145,16 +3144,22 @@ local VARARG_ISVARARG = 2 -- Flag indicating a function accepts '...'
 --  Lua 5.1 vararg system change - https://www.lua.org/manual/5.1/manual.html#7.1
 
 -- Constant type flags
-local LUA_TNIL     = 0
 local LUA_TBOOLEAN = 1
 local LUA_TNUMBER  = 3
 local LUA_TSTRING  = 4
 
---* Compiler *--
-local Compiler = {}
-Compiler.__index = Compiler
+-- Operand sizes/positions
+local POS_A   = 6
+local POS_B   = 23
+local POS_C   = 14
+local POS_Bx  = 14
+local POS_sBx = 14
 
-Compiler.CONFIG = {
+--* BytecodeEmitter *--
+local BytecodeEmitter = {}
+BytecodeEmitter.__index = BytecodeEmitter
+
+BytecodeEmitter.CONFIG = {
   LUA_COMMON_HEADER = "\27Lua" -- Standard magic number identifying Lua bytecode
     --[[version=]]             .. string.char(0x51) -- 0x51 signifies Lua version 5.1
     --[[format=]]              .. string.char(0)    -- 0 = official format version
@@ -3173,46 +3178,46 @@ Compiler.CONFIG = {
   --  Format: [Opname] = {opcodeIndex, argumentMode, argBMode, argCMode}
   --   - opcodeIndex: The index (0-based) of the opcode in the Lua 5.1 instruction set.
   --   - argumentMode: The mode used to encode the instruction arguments.
-  --   - argBMode: The type of the B argument (OpArgN, OpArgU, OpArgR, OpArgK).
-  --   - argCMode: The type of the C argument (OpArgN, OpArgU, OpArgR, OpArgK).
+  --   - argBMode: The type of the B argument (OP_ARG_N, OP_ARG_U, OP_ARG_R, OP_ARG_K).
+  --   - argCMode: The type of the C argument (OP_ARG_N, OP_ARG_U, OP_ARG_R, OP_ARG_K).
   --
   -- Source: https://www.lua.org/source/5.1/lopcodes.c.html#luaP_opmodes
-  COMPILER_OPCODE_LOOKUP = {
-    ["MOVE"]     = {0, MODE_iABC, OpArgR, OpArgN},   ["LOADK"]     = {1, MODE_iABx, OpArgK, OpArgN},
-    ["LOADBOOL"] = {2, MODE_iABC, OpArgU, OpArgU},   ["LOADNIL"]   = {3, MODE_iABC, OpArgR, OpArgN},
-    ["GETUPVAL"] = {4, MODE_iABC, OpArgU, OpArgN},   ["GETGLOBAL"] = {5, MODE_iABx, OpArgK, OpArgN},
-    ["GETTABLE"] = {6, MODE_iABC, OpArgR, OpArgK},   ["SETGLOBAL"] = {7, MODE_iABx, OpArgK, OpArgN},
-    ["SETUPVAL"] = {8, MODE_iABC, OpArgU, OpArgN},   ["SETTABLE"]  = {9, MODE_iABC, OpArgK, OpArgK},
-    ["NEWTABLE"] = {10, MODE_iABC, OpArgU, OpArgU},  ["SELF"]      = {11, MODE_iABC, OpArgR, OpArgK},
-    ["ADD"]      = {12, MODE_iABC, OpArgK, OpArgK},  ["SUB"]       = {13, MODE_iABC, OpArgK, OpArgK},
-    ["MUL"]      = {14, MODE_iABC, OpArgK, OpArgK},  ["DIV"]       = {15, MODE_iABC, OpArgK, OpArgK},
-    ["MOD"]      = {16, MODE_iABC, OpArgK, OpArgK},  ["POW"]       = {17, MODE_iABC, OpArgK, OpArgK},
-    ["UNM"]      = {18, MODE_iABC, OpArgR, OpArgN},  ["NOT"]       = {19, MODE_iABC, OpArgR, OpArgN},
-    ["LEN"]      = {20, MODE_iABC, OpArgR, OpArgN},  ["CONCAT"]    = {21, MODE_iABC, OpArgR, OpArgR},
-    ["JMP"]      = {22, MODE_iAsBx, OpArgR, OpArgN}, ["EQ"]        = {23, MODE_iABC, OpArgK, OpArgK},
-    ["LT"]       = {24, MODE_iABC, OpArgK, OpArgK},  ["LE"]        = {25, MODE_iABC, OpArgK, OpArgK},
-    ["TEST"]     = {26, MODE_iABC, OpArgR, OpArgU},  ["TESTSET"]   = {27, MODE_iABC, OpArgR, OpArgU},
-    ["CALL"]     = {28, MODE_iABC, OpArgU, OpArgU},  ["TAILCALL"]  = {29, MODE_iABC, OpArgU, OpArgU},
-    ["RETURN"]   = {30, MODE_iABC, OpArgU, OpArgN},  ["FORLOOP"]   = {31, MODE_iAsBx, OpArgR, OpArgN},
-    ["FORPREP"]  = {32, MODE_iAsBx, OpArgR, OpArgN}, ["TFORLOOP"]  = {33, MODE_iABC, OpArgN, OpArgU},
-    ["SETLIST"]  = {34, MODE_iABC, OpArgU, OpArgU},  ["CLOSE"]     = {35, MODE_iABC, OpArgN, OpArgN},
-    ["CLOSURE"]  = {36, MODE_iABx, OpArgU, OpArgN},  ["VARARG"]    = {37, MODE_iABC, OpArgU, OpArgN}
+  OPCODE_LOOKUP = {
+    ["MOVE"]     = {0, MODE_iABC, OP_ARG_R, OP_ARG_N},   ["LOADK"]     = {1, MODE_iABx, OP_ARG_K, OP_ARG_N},
+    ["LOADBOOL"] = {2, MODE_iABC, OP_ARG_U, OP_ARG_U},   ["LOADNIL"]   = {3, MODE_iABC, OP_ARG_R, OP_ARG_N},
+    ["GETUPVAL"] = {4, MODE_iABC, OP_ARG_U, OP_ARG_N},   ["GETGLOBAL"] = {5, MODE_iABx, OP_ARG_K, OP_ARG_N},
+    ["GETTABLE"] = {6, MODE_iABC, OP_ARG_R, OP_ARG_K},   ["SETGLOBAL"] = {7, MODE_iABx, OP_ARG_K, OP_ARG_N},
+    ["SETUPVAL"] = {8, MODE_iABC, OP_ARG_U, OP_ARG_N},   ["SETTABLE"]  = {9, MODE_iABC, OP_ARG_K, OP_ARG_K},
+    ["NEWTABLE"] = {10, MODE_iABC, OP_ARG_U, OP_ARG_U},  ["SELF"]      = {11, MODE_iABC, OP_ARG_R, OP_ARG_K},
+    ["ADD"]      = {12, MODE_iABC, OP_ARG_K, OP_ARG_K},  ["SUB"]       = {13, MODE_iABC, OP_ARG_K, OP_ARG_K},
+    ["MUL"]      = {14, MODE_iABC, OP_ARG_K, OP_ARG_K},  ["DIV"]       = {15, MODE_iABC, OP_ARG_K, OP_ARG_K},
+    ["MOD"]      = {16, MODE_iABC, OP_ARG_K, OP_ARG_K},  ["POW"]       = {17, MODE_iABC, OP_ARG_K, OP_ARG_K},
+    ["UNM"]      = {18, MODE_iABC, OP_ARG_R, OP_ARG_N},  ["NOT"]       = {19, MODE_iABC, OP_ARG_R, OP_ARG_N},
+    ["LEN"]      = {20, MODE_iABC, OP_ARG_R, OP_ARG_N},  ["CONCAT"]    = {21, MODE_iABC, OP_ARG_R, OP_ARG_R},
+    ["JMP"]      = {22, MODE_iAsBx, OP_ARG_R, OP_ARG_N}, ["EQ"]        = {23, MODE_iABC, OP_ARG_K, OP_ARG_K},
+    ["LT"]       = {24, MODE_iABC, OP_ARG_K, OP_ARG_K},  ["LE"]        = {25, MODE_iABC, OP_ARG_K, OP_ARG_K},
+    ["TEST"]     = {26, MODE_iABC, OP_ARG_R, OP_ARG_U},  ["TESTSET"]   = {27, MODE_iABC, OP_ARG_R, OP_ARG_U},
+    ["CALL"]     = {28, MODE_iABC, OP_ARG_U, OP_ARG_U},  ["TAILCALL"]  = {29, MODE_iABC, OP_ARG_U, OP_ARG_U},
+    ["RETURN"]   = {30, MODE_iABC, OP_ARG_U, OP_ARG_N},  ["FORLOOP"]   = {31, MODE_iAsBx, OP_ARG_R, OP_ARG_N},
+    ["FORPREP"]  = {32, MODE_iAsBx, OP_ARG_R, OP_ARG_N}, ["TFORLOOP"]  = {33, MODE_iABC, OP_ARG_N, OP_ARG_U},
+    ["SETLIST"]  = {34, MODE_iABC, OP_ARG_U, OP_ARG_U},  ["CLOSE"]     = {35, MODE_iABC, OP_ARG_N, OP_ARG_N},
+    ["CLOSURE"]  = {36, MODE_iABx, OP_ARG_U, OP_ARG_N},  ["VARARG"]    = {37, MODE_iABC, OP_ARG_U, OP_ARG_N}
   }
 }
 
---// Compiler Constructor //--
-function Compiler.new(mainProto)
+--// BytecodeEmitter Constructor //--
+function BytecodeEmitter.new(mainProto)
   --// Type Checking //--
   assert(type(mainProto) == "table", "Expected table for 'mainProto', got " .. type(mainProto))
   assert(mainProto.code and mainProto.constants, "Expected a valid Lua function prototype for 'mainProto'")
 
   --// Instance //--
-  local CompilerInstance = setmetatable({}, Compiler)
+  local self = setmetatable({}, BytecodeEmitter)
 
   --// Initialization //--
-  CompilerInstance.mainProto = mainProto
+  self.mainProto = mainProto
 
-  return CompilerInstance
+  return self
 end
 
 --// Utility Functions //--
@@ -3220,7 +3225,7 @@ end
 -- A custom implementation of the `frexp` function, which decomposes
 -- a floating-point number into its mantissa and exponent.
 -- This is necessary because Lua 5.3+ does not have `math.frexp`,
-function Compiler:frexp(value)
+function BytecodeEmitter:frexp(value)
   -- Use built-in if available (Lua 5.1, Lua 5.2)
   if math.frexp then return math.frexp(value) end
   if value == 0 then return 0, 0 end
@@ -3231,34 +3236,18 @@ function Compiler:frexp(value)
 end
 
 -- A bitwise left shift, simulated with multiplication.
-function Compiler:lshift(value, shift)
+function BytecodeEmitter:lshift(value, shift)
   return value * (2 ^ shift)
 end
 
---[[
-  RK (Register or Konstant) Encoding:
-
-  Lua uses a clever trick to encode both register indices and constant indices
-  in a single 9-bit field (B or C operands in iABC instructions).
-
-  The encoding works as follows:
-  - Positive values (0-255): Direct register indices
-  - Negative values (-1 to -256): Constant indices (encoded as 256 + abs(value))
-
-  Example:
-    Register R5:  5   -> encoded as 5
-    Constant K0: -1   -> encoded as 256
-    Constant K1: -2   -> encoded as 257
-    Constant K42: -43 -> encoded as 299
-
-  The VM decodes this by checking if the value is >= 256:
-    if (operand >= 256) then
-      -- It's a constant, get from proto.constants[operand - 256]
-    else
-      -- It's a register, get from stack[operand]
-    end
---]]
-function Compiler:encodeRKValue(value)
+-- RK (Register-or-Constant) encoding:
+-- Lua packs a register index and a constant index into the same 9-bit operand.
+-- Values 0..255 refer to registers (stack[operand]).
+-- Values >= 256 refer to constants and map to proto.constants[operand - 256].
+-- TLC represents constants as negative indices (e.g. -1 == first constant).
+-- encodeRKValue converts TLC's negative constant index into the unsigned RK form
+-- used in bytecode (for example: -1 -> 256).
+function BytecodeEmitter:encodeRKValue(value)
   if value < 0 then
     return 255 - value
   end
@@ -3270,24 +3259,26 @@ end
 -- Example:
 --   LOADK     5, -4 --> LOADK     5, 3
 --   GETGLOBAL 2, -1 --> GETGLOBAL 2, 0
-function Compiler:toUnsigned(value)
+function BytecodeEmitter:toUnsigned(value)
   if value < 0 then
     return (-value) - 1
   end
   return value
 end
 
-function Compiler:makeOneByte(value)
+-- Converts `value` number into 1 byte (8 bits) representation.
+function BytecodeEmitter:encodeUint8(value)
   if value < 0 or value > 255 then
-    error("Compiler: makeOneByte value out of range (0-255): " .. tostring(value))
+    error("BytecodeEmitter: encodeUint8 value out of range (0-255): " .. tostring(value))
   end
 
   return string.char(value % 256)
 end
 
-function Compiler:makeFourBytes(value)
+-- Converts `value` number into 4 bytes (32 bits) little-endian representation.
+function BytecodeEmitter:encodeUint32(value)
   if value < 0 or value > 4294967295 then
-    error("Compiler: makeFourBytes value out of range (0-4294967295): " .. tostring(value))
+    error("BytecodeEmitter: encodeUint32 value out of range (0-4294967295): " .. tostring(value))
   end
 
   local b1 = value % 256 value = math.floor(value / 256)
@@ -3298,36 +3289,39 @@ function Compiler:makeFourBytes(value)
   return string.char(b1, b2, b3, b4)
 end
 
-function Compiler:makeEightBytes(value)
+-- Converts `value` number into 8 bytes (64 bits) little-endian representation.
+function BytecodeEmitter:encodeUint64(value)
   if value < 0 or value > 18446744073709551615 then
-    error("Compiler: makeEightBytes value out of range (0-18446744073709551615): " .. tostring(value))
+    error("BytecodeEmitter: encodeUint64 value out of range (0-18446744073709551615): " .. tostring(value))
   end
 
   local lowWord  = value % 2^32
   local highWord = math.floor(value / 2^32)
 
-  return self:makeFourBytes(lowWord) .. self:makeFourBytes(highWord)
+  return self:encodeUint32(lowWord) .. self:encodeUint32(highWord)
 end
 
-function Compiler:makeDouble(value)
+-- Encodes a Lua number (float64) into its IEEE 754 binary representation (8 bytes).
+-- Reference: https://en.wikipedia.org/wiki/Double-precision_floating-point_format.
+function BytecodeEmitter:encodeFloat64(value)
   -- Handle the simple edge cases first.
   if value == 0 then
     -- Zero is just 8 zero-bytes. Easy!
-    return self:makeEightBytes(0)
+    return self:encodeUint64(0)
   elseif value == 1/0 then -- Check for infinity
     -- The special representation for infinity is:
     --  exponent = all bits set to 1 (2047)
     --  faction  = 0
     local lowWord = 0
     local highWord = self:lshift(2047, 20) -- 0x7FF00000
-    return self:makeFourBytes(highWord) .. self:makeFourBytes(lowWord)
+    return self:encodeUint32(highWord) .. self:encodeUint32(lowWord)
   elseif value ~= value then -- Check for NaN (Not a Number)
     -- The special representation for NaN is:
     --  exponent = all bits set to 1 (2047)
     --  faction  = non-zero value (we'll use 1)
     local lowWord = 1
     local highWord = self:lshift(2047, 20) -- 0x7FF00000
-    return self:makeFourBytes(highWord) .. self:makeFourBytes(lowWord)
+    return self:encodeUint32(highWord) .. self:encodeUint32(lowWord)
   end
 
   -- Deconstruct the number into its core parts.
@@ -3363,212 +3357,219 @@ function Compiler:makeDouble(value)
 
   -- Convert the two 32-bit chunks to bytes.
   -- Since we're little-endian, the "low" part comes first.
-  return self:makeFourBytes(lowWord) .. self:makeFourBytes(highWord)
+  return self:encodeUint32(lowWord) .. self:encodeUint32(highWord)
 end
 
 --// Bytecode Generation //--
-function Compiler:makeString(value)
+function BytecodeEmitter:encodeString(value)
   value = value .. "\0"
-  local size = self:makeEightBytes(#value)
+  local size = self:encodeUint64(#value)
   return size .. value
 end
 
---[[
-  Serializes a constant value (nil, boolean, number, or string).
-
-  Format:
-  | Type Tag (1 byte) | Value (Variable Bytes) |
-
-  Type Tags: 0=nil, 1=bool, 3=number, 4=string
-  Value Format:
-    - nil: (none)
-    - boolean: 1 byte (0=false, 1=true)
-    - number: 8 bytes (IEEE 754 double)
-    - string: <size_t size><data...>'\0'
---]]
-function Compiler:makeConstant(constantValue)
+-- Encodes a Lua constant into its bytecode representation.
+function BytecodeEmitter:encodeConstant(constantValue)
   local constType = type(constantValue)
 
-  if constantValue == nil then
-    return self:makeOneByte(LUA_TNIL)
-  elseif constType == "boolean" then
-    return self:makeOneByte(LUA_TBOOLEAN) .. self:makeOneByte(constantValue and 1 or 0)
+  if constType == "boolean" then
+    return self:encodeUint8(LUA_TBOOLEAN) .. self:encodeUint8(constantValue and 1 or 0)
   elseif constType == "number" then
-    return self:makeOneByte(LUA_TNUMBER) .. self:makeDouble(constantValue)
+    return self:encodeUint8(LUA_TNUMBER) .. self:encodeFloat64(constantValue)
   elseif constType == "string" then
-    return self:makeOneByte(LUA_TSTRING) .. self:makeString(constantValue)
+    return self:encodeUint8(LUA_TSTRING) .. self:encodeString(constantValue)
   end
 
-  error("Compiler: Unsupported constant type '" .. constType .. "'")
+  error("BytecodeEmitter: Unsupported constant type '" .. constType .. "'")
 end
 
-function Compiler:makeInstruction(instruction)
-  -- First, let's look up the opcode's number and its argument format.
-  local instructionName = instruction[1]
-  local opcodeTable     = self.CONFIG.COMPILER_OPCODE_LOOKUP[instruction[1]]
-  if not opcodeTable or not instructionName then
-    error("Compiler: Unsupported instruction '" .. tostring(instructionName) .. "'")
-  end
-
-  local opcode, opmode, arg1, arg2 = opcodeTable[1], opcodeTable[2], opcodeTable[3], opcodeTable[4]
-  local a = instruction[2]
-
-  -- Check for overflow first
-  if a < 0 or a > 255 then
+-- Helper to validate operand ranges.
+-- Prevents silent overflows that would corrupt the bytecode.
+function BytecodeEmitter:validateOperand(value, min, max, operandName, instructionName)
+  if value < min or value > max then
     error(
       string.format(
-        "Compiler: Operand A overflow in instruction '%s'. Got %d. Valid range is 0 to 255.",
-        tostring(instructionName), a
+        "BytecodeEmitter: Operand %s overflow in instruction '%s'. Got %d. Valid range is %d to %d.",
+        operandName, instructionName, value, min, max
       )
     )
   end
+end
 
-  -- We build the 32-bit number by shifting each component to its designated
-  -- position and adding them together.
-  --
-  -- Field     | Size (bits) | Shift Left By | Position (from bit 0)
-  -- ----------|-------------|---------------|-----------------------
-  -- Opcode    | 6           | 0             | 0-5
-  -- A         | 8           | 6             | 6-13
-  -- C         | 9           | 14            | 14-22 (for iABC)
-  -- Bx/sBx    | 18          | 14            | 14-31 (for iABx/iAsBx)
-  -- B         | 9           | 23            | 23-31 (for iABC)
-  --
-  -- iABC:  [ Opcode(0-5 : 6) | A(6-13 : 8) | C(14-22 : 9) | B(23-31 : 9) ]
-  -- iABx:  [ Opcode(0-5 : 6) | A(6-13 : 8) |       Bx(14-31 : 18)        ]
-  -- iAsBx: [ Opcode(0-5 : 6) | A(6-13 : 8) |      sBx(14-31 : 18)        ]
-  --
-  -- NOTE: In iABC instructions, C comes before B in the byte layout.
+-- Encodes an instruction in iABC mode.
+-- Format: [ Opcode(6) | A(8) | C(9) | B(9) ]
+--
+-- NOTE: In the binary layout, C (bits 14-22) comes BEFORE B (bits 23-31).
+function BytecodeEmitter:encodeABCInstruction(opcode, a, instruction, argBMode, argCMode)
+  local instructionName = instruction[1]
+  local b, c = instruction[3], instruction[4]
 
-  a = self:lshift(a, 6)
+  -- Validate operands B and C (9 bits signed: -256 to 255 during RK encoding steps).
+  self:validateOperand(b, -256, 255, "B", instructionName)
+  self:validateOperand(c, -256, 255, "C", instructionName)
+
+  -- Handle RK() operands (register or constant).
+  -- If the argument mode is OpArgK, we encode constants specially.
+  if argBMode == OP_ARG_K then b = self:encodeRKValue(b) end
+  if argCMode == OP_ARG_K then c = self:encodeRKValue(c) end
+
+  -- Shift components to their positions.
+  local shiftedA = self:lshift(a, POS_A)
+  local shiftedB = self:lshift(b, POS_B)
+  local shiftedC = self:lshift(c, POS_C)
+
+  -- Combine all parts into a single 32-bit integer.
+  return self:encodeUint32(opcode + shiftedA + shiftedB + shiftedC)
+end
+
+-- Encodes an instruction in iABx mode.
+-- Format: [ Opcode(6) | A(8) | Bx(18) ]
+--
+-- Used for loading constants (LOADK) and global lookups (GETGLOBAL/SETGLOBAL).
+function BytecodeEmitter:encodeABxInstruction(opcode, a, instruction)
+  -- Bx is an unsigned 18-bit integer.
+  -- Since we use negative indices for constants internally, we must convert them
+  -- using `toUnsigned`.
+  local instructionName = instruction[1]
+  local bx = self:toUnsigned(instruction[3])
+
+  -- Validate operand Bx (18 bits unsigned: 0 to 262143).
+  self:validateOperand(bx, 0, 262143, "Bx", instructionName)
+
+  -- Shift components to their positions.
+  local shiftedA  = self:lshift(a, POS_A)
+  local shiftedBx = self:lshift(bx, POS_Bx)
+
+  -- Combine all parts into a single 32-bit integer.
+  return self:encodeUint32(opcode + shiftedA + shiftedBx)
+end
+
+-- Encodes an instruction in iAsBx mode.
+-- Format: [ Opcode(6) | A(8) | sBx(18) ]
+--
+-- Used for jumps (JMP, FORLOOP).
+-- sBx is a signed 18-bit integer represented in "Excess-K" encoding.
+function BytecodeEmitter:encodeAsBxInstruction(opcode, a, instruction)
+  local instructionName = instruction[1]
+  local b = instruction[3]
+
+  -- Validate operand sBx (18 bits signed: -131072 to 131071).
+  self:validateOperand(b, -131072, 131071, "sBx", instructionName)
+
+  -- sBx Encoding (Bias):
+  -- We add a bias of 131071 (2^17 - 1) to the value.
+  -- This maps the range [-131071, 131072] to the unsigned range [0, 262143].
+  -- This allows the processor to treat the field as unsigned while strictly
+  -- representing signed jump offsets.
+  local bias = 2^17 - 1
+  local sbx  = b + bias
+
+  -- Shift components to their positions.
+  local shiftedA  = self:lshift(a, POS_A)
+  local shiftedBx = self:lshift(sbx, POS_sBx)
+
+  -- Combine all parts into a single 32-bit integer.
+  return self:encodeUint32(opcode + shiftedA + shiftedBx)
+end
+
+-- Serializes a single instruction into its 4-byte representation.
+-- We build the 32-bit number by shifting each component to its designated
+-- position and adding them together.
+--
+-- Field     | Size (bits) | Shift Left By | Position (from bit 0)
+-- ----------|-------------|---------------|-----------------------
+-- Opcode    | 6           | 0             | 0-5
+-- A         | 8           | 6             | 6-13
+-- C         | 9           | 14            | 14-22 (for iABC)
+-- Bx/sBx    | 18          | 14            | 14-31 (for iABx/iAsBx)
+-- B         | 9           | 23            | 23-31 (for iABC)
+function BytecodeEmitter:encodeInstruction(instruction)
+  -- First, let's look up the opcode's number and its argument format.
+  local instructionName = tostring(instruction[1] or "<unknown>")
+  local opcodeData      = self.CONFIG.OPCODE_LOOKUP[instructionName]
+
+  if not opcodeData then
+    error("BytecodeEmitter: Unsupported instruction '" .. instructionName .. "'")
+  end
+
+  -- Unpack opcode data.
+  local opcode, opmode, arg1, arg2 = opcodeData[1], opcodeData[2], opcodeData[3], opcodeData[4]
+  local a = instruction[2]
+
+  -- Validate operand A (8 bits unsigned: 0 to 255)
+  self:validateOperand(a, 0, 255, "A", instructionName)
+
+  -- Dispatch to the appropriate encoder based on the instruction mode.
   if opmode == MODE_iABC then
-    local b, c = instruction[3], instruction[4]
-
-    -- Check for overflows first
-    if b < -256 or b > 255 then
-      error(
-        string.format(
-          "Compiler: Operand B overflow in instruction '%s'. Got %d. Valid range is -256 to 255.",
-          tostring(instructionName), b
-        )
-      )
-    end
-    if c < -256 or c > 255 then
-      error(
-        string.format(
-          "Compiler: Operand C overflow in instruction '%s'. Got %d. Valid range is -256 to 255.",
-          tostring(instructionName), c
-        )
-      )
-    end
-
-    -- Handle RK() operands (register or constant)
-    if arg1 == OpArgK then b = self:lshift(self:encodeRKValue(b), 23)
-    else                   b = self:lshift(b, 23) end
-    if arg2 == OpArgK then c = self:lshift(self:encodeRKValue(c), 14)
-    else                   c = self:lshift(c, 14) end
-
-    -- Combine: [ Opcode(0-5 : 6) | A(6-13 : 8) | C(14-22 : 9) | B(23-31 : 9) ]
-    return self:makeFourBytes(opcode + a + b + c)
+    return self:encodeABCInstruction(opcode, a, instruction, arg1, arg2)
   elseif opmode == MODE_iABx then
-    local bx = self:lshift(self:toUnsigned(instruction[3]), 14)
-
-    -- Combine: [ Opcode(0-5 : 6) | A(6-13 : 8) | Bx(14-31 : 18) ]
-    return self:makeFourBytes(opcode + a + bx)
+    return self:encodeABxInstruction(opcode, a, instruction)
   elseif opmode == MODE_iAsBx then
-    local b = instruction[3]
-
-    -- sBx (signed Bx) is split into two parts:
-    --  - negative values (-131072 to -1)
-    --  - positive values (0 to 131071)
-    --
-    -- This allows us to represent both positive and negative offsets.
-    -- To get sBx, we need to add 131071 (2^17 - 1) to Bx.
-    local sbx = self:lshift(b + (2^17 - 1), 14)
-
-    -- Combine: [ Opcode(0-5 : 6) | A(6-13 : 8) | sBx(14-31 : 18) ]
-    return self:makeFourBytes(opcode + a + sbx)
+    return self:encodeAsBxInstruction(opcode, a, instruction)
   end
 
-  error("Compiler: Unsupported instruction format for '" .. tostring(instructionName) .. "'")
-end
-
-function Compiler:makeConstantSection(proto)
-  local constantSection = { self:makeFourBytes(#proto.constants) } -- Number of constants
-  for index, constant in ipairs(proto.constants) do
-    constantSection[index + 1] = self:makeConstant(constant)
-  end
-  return table.concat(constantSection)
-end
-
-function Compiler:makeProtoSection(proto)
-  local protoSection = { self:makeFourBytes(#proto.protos) } -- Number of protos
-  for index, childProto in ipairs(proto.protos) do
-    protoSection[index + 1] = self:makeFunction(childProto)
-  end
-  return table.concat(protoSection)
+  error("BytecodeEmitter: Unsupported instruction format for '" .. instructionName .. "'")
 end
 
 -- Serializes the code section of a function prototype.
--- Format:
--- | Instruction Count (4 bytes) | Instruction 1 (4 bytes) | Instruction 2 (4 bytes) | ... |
-function Compiler:makeCodeSection(proto)
-  local codeSection = { self:makeFourBytes(#proto.code) } -- Number of instructions
+function BytecodeEmitter:encodeCodeSection(proto)
+  local codeSection = { }
   for index, instruction in ipairs(proto.code) do
-    codeSection[index + 1] = self:makeInstruction(instruction)
+    codeSection[index] = self:encodeInstruction(instruction)
   end
   return table.concat(codeSection)
 end
 
+-- Serializes the constant section of a function prototype.
+function BytecodeEmitter:encodeConstantSection(proto)
+  local constantSection = { }
+  for index, constant in ipairs(proto.constants) do
+    constantSection[index] = self:encodeConstant(constant)
+  end
+  return table.concat(constantSection)
+end
 
---[[
-  Serializes a complete Lua Function Prototype chunk.
+-- Serializes the nested prototype section of a function prototype.
+function BytecodeEmitter:encodePrototypeSection(proto)
+  local protoSection = { }
+  for index, childPrototype in ipairs(proto.protos) do
+    protoSection[index] = self:encodePrototype(childPrototype)
+  end
+  return table.concat(protoSection)
+end
 
-  Format:
-    +-----------------------------+-----------------------------------------+
-    | Field                       | Size (bytes) / Format                   |
-    +-----------------------------+-----------------------------------------+
-    | Source Name                 | <size_t size><chars...>\0 (string)      |
-    | Line Defined                | 4 (integer, debug)                      |
-    | Last Line Defined           | 4 (integer, debug)                      |
-    | Number of Upvalues          | 1 (byte)                                |
-    | Number of Parameters        | 1 (byte)                                |
-    | Is Vararg Flag              | 1 (byte, 0 or 2)                        |
-    | Max Stack Size              | 1 (byte)                                |
-    +-----------------------------+-----------------------------------------+
-    | Code Section                | <See makeCodeSection>                   |
-    +-----------------------------+-----------------------------------------+
-    | Constant Section            | <See makeConstantSection>               |
-    +-----------------------------+-----------------------------------------+
-    | Debug Info (Line Numbers)   | Size=0 (4 bytes) + No Data              |
-    | Debug Info (Local Vars)     | Size=0 (4 bytes) + No Data              |
-    | Debug Info (Upvalue Names)  | Size=0 (4 bytes) + No Data              |
-    +-----------------------------+-----------------------------------------+
---]]
-function Compiler:makeFunction(proto)
+-- Serializes a complete Lua Function Prototype chunk.
+function BytecodeEmitter:encodePrototype(proto)
   -- Basic validation of the function prototype.
-  if not proto.code or not proto.constants then error("Compiler: Invalid function prototype")
-  elseif #proto.upvalues > 255    then error("Compiler: Too many upvalues in function prototype (max 255)")
-  elseif proto.numParams > 255    then error("Compiler: Too many parameters in function prototype (max 255)")
-  elseif proto.maxStackSize > 255 then error("Compiler: Max stack size too large in function prototype (max 255)")
+  if not proto.code or not proto.constants then error("BytecodeEmitter: Invalid function prototype")
+  elseif #proto.upvalues > 255    then error("BytecodeEmitter: Too many upvalues in function prototype (max 255)")
+  elseif proto.numParams > 255    then error("BytecodeEmitter: Too many parameters in function prototype (max 255)")
+  elseif proto.maxStackSize > 255 then error("BytecodeEmitter: Max stack size too large in function prototype (max 255)")
   end
 
   return table.concat({
-    self:makeString(proto.functionName),  -- Source name
-    self:makeFourBytes(0),                -- Line defined (debug)
-    self:makeFourBytes(0),                -- Last line defined (debug)
-    self:makeOneByte(#proto.upvalues),    -- nups (Number of upvalues)
-    self:makeOneByte(proto.numParams),    -- Number of parameters
-    self:makeOneByte((proto.isVararg and VARARG_ISVARARG) or VARARG_NONE),
-    self:makeOneByte(proto.maxStackSize), -- Max stack size
-    self:makeCodeSection(proto),          -- Code section
-    self:makeConstantSection(proto),      -- Constant section
-    self:makeProtoSection(proto),         -- Nested prototype section
+    -- Header --
+    self:encodeString(proto.functionName), -- Source name.
+    self:encodeUint32(0),                  -- Line defined (debug).
+    self:encodeUint32(0),                  -- Last line defined (debug).
+    self:encodeUint8(#proto.upvalues),     -- nups (Number of upvalues).
+    self:encodeUint8(proto.numParams),     -- Number of parameters.
+    self:encodeUint8((proto.isVararg and VARARG_ISVARARG) or VARARG_NONE),
+    self:encodeUint8(proto.maxStackSize),  -- Max stack size.
 
-    -- Debug info (not implemented)
-    self:makeFourBytes(0), -- Line info (debug)
-    self:makeFourBytes(0), -- Local variables (debug)
-    self:makeFourBytes(0)  -- Upvalues (debug)
+    -- Sections --
+    self:encodeUint32(#proto.code),        -- Instruction count.
+    self:encodeCodeSection(proto),         -- Code section.
+
+    self:encodeUint32(#proto.constants),   -- Constant count.
+    self:encodeConstantSection(proto),     -- Constant section.
+
+    self:encodeUint32(#proto.protos),      -- Prototype count.
+    self:encodePrototypeSection(proto),    -- Nested prototype section.
+
+    -- Debug info (not implemented) --
+    self:encodeUint32(0), -- Line info (debug).
+    self:encodeUint32(0), -- Local variables (debug).
+    self:encodeUint32(0)  -- Upvalues (debug).
 
     -- Note: TLC doesn't implement debug info as that would require tracking
     --       line numbers, local variables, and upvalue names, etc. which will
@@ -3577,8 +3578,8 @@ function Compiler:makeFunction(proto)
 end
 
 --// Main //--
-function Compiler:compile()
-  return self.CONFIG.LUA_COMMON_HEADER .. self:makeFunction(self.mainProto)
+function BytecodeEmitter:emit()
+  return self.CONFIG.LUA_COMMON_HEADER .. self:encodePrototype(self.mainProto)
 end
 
 --[[
@@ -4188,7 +4189,7 @@ return {
   Tokenizer      = Tokenizer,
   Parser         = Parser,
   CodeGenerator  = CodeGenerator,
-  Compiler       = Compiler,
+  BytecodeEmitter = BytecodeEmitter,
   VirtualMachine = VirtualMachine,
 
   -- Shortcuts for convenience.
@@ -4204,7 +4205,7 @@ return {
     local tokens   = Tokenizer.new(code):tokenize()
     local ast      = Parser.new(tokens):parse()
     local proto    = CodeGenerator.new(ast):generate()
-    local bytecode = Compiler.new(proto):compile()
+    local bytecode = BytecodeEmitter.new(proto):emit()
 
     return bytecode
   end
