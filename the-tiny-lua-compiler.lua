@@ -719,46 +719,55 @@ end
 
 --[[
     ============================================================================
-                        (ﾉ◕ヮ◕)ﾉ*:･ﾟ AST FACTORY ONLINE!
+                  (ﾉ◕ヮ◕)ﾉ*:･ﾟ THE PARSER!
     ============================================================================
 
+    The Second Stage of Compilation: Building the Structure
+
+    While the Tokenizer sees a flat list of words ("if", "x", "then"), the
+    Parser sees the structure and hierarchy of the code. It organizes tokens
+    into an Abstract Syntax Tree (AST).
+
+    Strategy: Recursive Descent
+    ---------------------------
+    This parser uses a "Recursive Descent" strategy. This means we have a
+    separate Lua function for every grammar rule (e.g., `parseIfStatement`,
+    `parseWhileStatement`). These functions call each other recursively to
+    match the structure of the code. It is the most intuitive way to write a
+    parser by hand.
 --]]
 
 --* Parser *--
 -- The main object responsible for consuming tokens and building the AST.
 local Parser = {}
-Parser.__index = Parser -- Set up for method calls via `.`
+Parser.__index = Parser -- Set up for method calls via `.`.
 
 Parser.CONFIG = {
   --[[
-    Who gets solved first in an expression? This table settles all arguments.
-    It defines the binding power and associativity of binary operators.
-    We use this in our precedence climbing algorithm (`parseBinaryExpression`).
+    Operator Precedence & Associativity Table
+    -----------------------------------------
+    This table drives the "Precedence Climbing" algorithm used in `parseBinaryExpression`.
+    It answers two questions:
+    1. Binding Power: In `1 + 2 * 3`, why is `*` evaluated before `+`?
+    2. Associativity: In `a ^ b ^ c`, do we calculate `(a^b)^c` or `a^(b^c)`?
 
-    Format: {left_precedence, right_precedence}
+    Format: { left_binding_power, right_binding_power }
 
-    Key Rules:
-      - Higher number = tighter binding (operator gets evaluated sooner).
-         Example: `5 + 3 * 2`. `*` (prec 7) has higher precedence than `+` (prec 6),
-         so `3 * 2` is evaluated first.
-      - If right_precedence > left_precedence: Right-Associative.
-         Operators group from right to left.
-         Example: `2 ^ 3 ^ 2`. `^` is right-associative ({10, 9}). `3 ^ 2` is grouped first,
-         then `2 ^ (3^2)`.
-      - If left_precedence >= right_precedence: Left-Associative.
-         Operators group from left to right (most common).
-         Example: `5 + 3 - 2`. Both `+` and `-` are left-associative ({6, 6}).
-         `5 + 3` is grouped first, then `(5+3) - 2`.
-
-    Using distinct left/right precedences is key to handling associativity
-    correctly in the precedence climbing algorithm.
+    How it works:
+    - Higher numbers mean tighter binding (evaluated sooner).
+    - Left-Associative (e.g., `+`, `-`, `*`):
+        Left power >= Right power.
+        This makes `1 - 2 - 3` parse as `(1 - 2) - 3`.
+    - Right-Associative (e.g., `^`, `..`):
+        Right power > Left power.
+        This makes `a ^ b ^ c` parse as `a ^ (b ^ c)`.
   --]]
   PRECEDENCE = {
     ["+"]   = {6, 6},  ["-"]   = {6, 6}, -- Addition/Subtraction
     ["*"]   = {7, 7},  ["/"]   = {7, 7}, -- Multiplication/Division
     ["%"]   = {7, 7},                    -- Modulo
-    ["^"]   = {10, 9},                   -- Exponentiation (Right-associative, binds tighter than unary)
-    [".."]  = {5, 4},                    -- String Concatenation (Right-associative)
+    ["^"]   = {10, 9},                   -- Exponentiation (Right-associative!)
+    [".."]  = {5, 4},                    -- String Concatenation (Right-associative!)
     ["=="]  = {3, 3},  ["~="]  = {3, 3}, -- Equality / Inequality
     ["<"]   = {3, 3},  [">"]   = {3, 3}, -- Less Than / Greater Than
     ["<="]  = {3, 3},  [">="]  = {3, 3}, -- Less Than or Equal / Greater Than or Equal
@@ -766,17 +775,22 @@ Parser.CONFIG = {
     ["or"]  = {1, 1}                     -- Logical OR (Short-circuiting)
   },
 
-  -- Precedence for all unary operators.
+  -- Precedence for all unary operators (like `-x` or `not x`).
+  -- They bind tighter than most binary operators but looser than exponentiation.
   UNARY_PRECEDENCE = 8,
 
-  -- A set of valid expression node types that can appear on the
-  -- left-hand side of an assignment statement.
+  -- L-Values (Locator Values).
+  -- These are the specific node types that are allowed to appear on the
+  -- LEFT side of an assignment (e.g., `x = 1` or `t.k = 1`).
+  -- You can't assign to a number (`5 = 1` is invalid), so "NumericLiteral" isn't here.
   LVALUE_NODES = createLookupTable({ "Variable", "IndexExpression" }),
 
   -- Keywords that explicitly terminate a code block.
+  -- When the parser sees one of these, it knows the current list of statements is done.
   TERMINATION_KEYWORDS = createLookupTable({ "end", "else", "elseif", "until" }),
 
-  -- Dispatches statement-starting keywords to their respective parsing methods.
+  -- Statement Dispatcher.
+  -- Maps a keyword to the specific function responsible for parsing that statement.
   KEYWORD_HANDLERS = {
     ["break"]    = "parseBreakStatement",
     ["do"]       = "parseDoStatement",
@@ -806,18 +820,18 @@ function Parser.new(tokens)
   assert(type(tokens) == "table", "Parser.new requires a table of tokens. Got: " .. type(tokens))
 
   --// Instance Creation //--
-  local ParserInstance = setmetatable({}, Parser)
+  local self = setmetatable({}, Parser)
 
   --// Initialization //--
-  ParserInstance.tokens = tokens
-  ParserInstance.currentTokenIndex = 1
-  ParserInstance.currentToken = tokens[1]
+  self.tokens = tokens
+  self.currentTokenIndex = 1
+  self.currentToken = tokens[1]
 
-  -- Initialize the stack for managing variable scopes (local, upvalue, global)
-  ParserInstance.scopeStack = {}
-  ParserInstance.currentScope = nil -- Pointer to the topmost scope on the stack
+  -- Initialize the stack for managing variable scopes.
+  self.scopeStack = {}
+  self.currentScope = nil -- Pointer to the topmost scope on the stack.
 
-  return ParserInstance
+  return self
 end
 
 --// Token Navigation //--
@@ -841,7 +855,10 @@ function Parser:consume(n)
     -- Simple safety check: if we're trying to reach past the end of the stream,
     -- we should throw an error. This prevents infinite loops in the parser.
   if not self.currentToken and self.currentTokenIndex ~= 1 then
-    error("Internal Parser Error: Attempted to consume past end of stream. Infinite loop detected?")
+    error(
+      "Internal Parser Error: Attempted to consume past end of stream. "
+      .. "Infinite loop detected?"
+    )
   end
 
   -- Advance the token index
@@ -910,11 +927,11 @@ end
 -- that causes variables from enclosing scopes to become 'upvalues' if accessed.
 function Parser:enterScope(isFunctionScope)
   local newScope = {
-    localVariables = {}, -- Used to track local variables declared in this scope
+    localVariables = {}, -- Used to track local variables declared in this scope.
     isFunctionScope = isFunctionScope or false, -- Is this a function's scope?
   }
-  table.insert(self.scopeStack, newScope) -- Push the new scope onto the stack
-  self.currentScope = newScope -- The new scope is now the active one
+  table.insert(self.scopeStack, newScope) -- Push the new scope onto the stack.
+  self.currentScope = newScope -- The new scope is now the active one.
   return newScope
 end
 
@@ -923,15 +940,17 @@ end
 -- Called when leaving a block, loop body, or function definition.
 function Parser:exitScope()
   table.remove(self.scopeStack)
-  -- The new `currentScope` is the one now at the top of the stack (or nil if stack is empty)
+
+  -- The new `currentScope` is the one now at the top
+  -- of the stack (or nil if stack is empty).
   self.currentScope = self.scopeStack[#self.scopeStack]
 end
 
 --// In-Scope Variable Management //--
 -- These functions help track local variable declarations within the current scope.
 
--- Records that a local variable with `variable` name has been declared in the `currentScope`.
--- Used when parsing `local variable` or function parameters.
+-- Records that a local variable with `variable` name has been declared
+-- in the `currentScope`. Used when parsing `local variable` or function parameters.
 function Parser:declareLocalVariable(variable)
   -- Mark the variable name as existing in the current scope's local list.
   self.currentScope.localVariables[variable] = true
@@ -945,34 +964,35 @@ function Parser:declareLocalVariables(variables)
   end
 end
 
--- Determines the type of variable reference (Local, Upvalue, or Global)
--- by searching upwards through the scope stack from the `currentScope`.
--- This is a fundamental part of static analysis during parsing to understand
--- how a variable name should be resolved.
--- Returns the type string ("Local", "Upvalue", "Global").
--- Optionally returns the index of the scope where it was found (for Local/Upvalue).
+-- Resolves a variable name to its scope type: Local, Upvalue, or Global.
+-- This implements Lua's lexical scoping rules by walking up the scope chain.
+--
+-- Local: Found in the current function's scope or its blocks.
+-- Upvalue: Found in an enclosing function's scope (closure capture).
+-- Global: Not found in any open scope, assumed to be in _G.
 function Parser:getVariableType(variableName)
   local scopeStack = self.scopeStack
-  local isUpvalue  = false -- Flag to track if we've crossed a function boundary
+  local isUpvalue  = false
 
-  -- Iterate backwards from the current scope up the stack
+  -- Walk up the scope stack from innermost to outermost.
   for scopeIndex = #scopeStack, 1, -1 do
     local scope = scopeStack[scopeIndex]
-    -- Check if the variable is declared as a local in this scope
-    if scope.localVariables[variableName] then
-      -- Found it! Determine if it's a direct local or an upvalue
-      local variableType = (isUpvalue and "Upvalue") or "Local"
-      return variableType, scopeIndex -- Return type and the scope index where it was found
 
-    -- If this scope is a function scope, any variable found further out
-    -- will be an upvalue relative to subsequent nested function scopes.
-    -- We set this flag after checking locals in the current function scope.
+    -- If found, determine if it's a local or an upvalue based on whether
+    -- we have crossed a function boundary during the search.
+    if scope.localVariables[variableName] then
+      local variableType = (isUpvalue and "Upvalue") or "Local"
+      return variableType, scopeIndex
+
+    -- A function scope acts as a closure boundary. Any variable found
+    -- in a scope above this one must be captured as an upvalue.
     elseif scope.isFunctionScope then
       isUpvalue = true
     end
   end
 
-  -- If the loop finishes without finding the variable in any scope, it's global.
+  -- If the variable isn't declare in any enclosing scope,
+  -- Lua assumes it refers to a global variable.
   return "Global"
 end
 
@@ -1116,30 +1136,30 @@ function Parser:consumeIdentifierList()
 end
 
 -- Parses a parameter list within a function definition.
--- Example: `(a, b, ...)`
 -- Handles regular named parameters and the optional vararg token `...`.
 -- Consumes the entire parameter list syntax, including parentheses and commas.
--- Returns a list of parameter names and a boolean indicating if vararg was present.
+-- Returns a list of parameter names and a boolean if vararg is present.
+-- Example: `(a, b, c, ...)` -> returns `{"a", "b", "c"}, true`
 function Parser:consumeParameters()
-  self:consumeToken("LeftParen") -- Expect and consume the opening parenthesis
+  self:consumeToken("LeftParen") -- Expect and consume the opening parenthesis.
 
-  local parameters = {} -- List of parameter names
-  local isVararg = false -- Flag for varargs
+  local parameters = {} -- List of parameter names.
+  local isVararg = false -- Flag for varargs.
 
-  -- Loop as long as the current token is NOT the closing parenthesis
-  while self.currentToken and not self:checkTokenType("RightParen") do
-    -- Check for regular named parameters (must be identifiers)
-    if self.currentToken.TYPE == "Identifier" then
-      -- Add the parameter name to the list
+  -- Loop as long as the current token is NOT the closing parenthesis.
+  while self.currentToken and not self:checkTokenKind("RightParen") do
+    -- Check for regular named parameters (must be identifiers).
+    if self.currentToken.kind == "Identifier" then
+      -- Add the parameter name to the list.
       table.insert(parameters, self.currentToken.value)
-      self:consume(1) -- Consume the identifier token
+      self:consume(1) -- Consume the identifier token.
 
-    -- Check for the vararg token "..."
-    elseif self.currentToken.TYPE == "Vararg" then
-      isVararg = true -- Set the vararg flag
-      self:consumeToken("Vararg") -- Expect and consume the "..." token
+    -- Check for the vararg token "...".
+    elseif self.currentToken.kind == "Vararg" then
+      isVararg = true -- Set the vararg flag.
+      self:consumeToken("Vararg") -- Expect and consume the "..." token.
       -- According to Lua grammar, "..." must be the last parameter.
-      break -- Exit the loop after consuming vararg
+      break -- Exit the loop after consuming vararg.
 
     -- If it's neither an identifier nor vararg, it's a syntax error.
     else
@@ -1149,14 +1169,16 @@ function Parser:consumeParameters()
       )
     end
 
-    -- After a parameter, we expect a comma, unless it's the last parameter before the closing parenthesis.
-    -- Check if the current token is a comma. If not, break the loop (assuming it's the closing paren).
+    -- After a parameter, we expect a comma, unless it's the last parameter
+    -- before the closing parenthesis. Check if the current token is a comma.
+    -- If not, break the loop (assuming it's the closing paren).
     if not self:isComma() then break end
-    self:consume(1) -- Consume the comma
+    self:consume(1) -- Consume the comma.
+  end -- Loop ends when ')' is encountered or after consuming '...'.
 
-  end -- Loop ends when ')' is encountered or after consuming '...'
+  -- Expect and consume the closing parenthesis.
+  self:consumeToken("RightParen")
 
-  self:consumeToken("RightParen") -- Expect and consume the closing parenthesis
   return parameters, isVararg
 end
 
@@ -1197,12 +1219,12 @@ function Parser:consumeIndexExpression(currentExpression)
 end
 
 function Parser:consumeTable()
-  self:consumeToken("LeftBrace") -- Consume the "{"
+  self:consumeToken("LeftBrace") -- Consume the "{".
 
   local implicitKeyCounter = 1
   local tableElements      = {}
 
-  -- Loop through tokens until we find the closing "}"
+  -- Loop through tokens until we find the closing "}".
   while self.currentToken and not self:checkTokenKind("RightBrace") do
     local key, value
     local isImplicitKey = false
@@ -1225,8 +1247,8 @@ function Parser:consumeTable()
       key = { kind = "StringLiteral",
         value = self.currentToken.value
       }
-      self:consume(1) -- Consume the identifier
-      self:consume(1) -- Consume the "="
+      self:consume(1) -- Consume the identifier.
+      self:consume(1) -- Consume the "=".
       value = self:consumeExpression()
 
     else
@@ -1258,7 +1280,7 @@ function Parser:consumeTable()
     self:consume(1) -- Consume the separator.
   end
 
-  self:consumeToken("RightBrace") -- Consume the "}" symbol
+  self:consumeToken("RightBrace") -- Consume the "}" symbol.
 
   return { kind = "TableConstructor",
     elements = tableElements
@@ -1271,10 +1293,10 @@ function Parser:consumeFunctionCall(currentExpression, isMethodCall)
   local arguments
 
   -- Explicit call with parentheses: `f(a, b)`.
-  if currentTokenType == "LeftParen" then
-    self:consume(1) -- Consume the left parenthesis '('
+  if currentTokenKind == "LeftParen" then
+    self:consume(1) -- Consume the left parenthesis '('.
     arguments = self:consumeExpressions()
-    self:consumeToken("RightParen") -- Expect and consume the right parenthesis ')'
+    self:consumeToken("RightParen") -- Expect and consume the right parenthesis ')'.
 
   -- Implicit call with a string: `print "hello" `
   elseif currentTokenKind == "String" then
@@ -1284,7 +1306,7 @@ function Parser:consumeFunctionCall(currentExpression, isMethodCall)
       value = currentToken.value
     } }
 
-  -- Implicit call with a table: `f {1, 2, 3} `
+  -- Implicit call with a table: `f {1, 2, 3} `.
   elseif currentTokenKind == "LeftBrace" then
     arguments = { self:consumeTable() }
   end
@@ -1297,10 +1319,10 @@ function Parser:consumeFunctionCall(currentExpression, isMethodCall)
 end
 
 function Parser:consumeMethodCall(currentExpression)
-  self:consumeToken("Colon") -- Expect and consume the colon (':')
+  self:consumeToken("Colon") -- Expect and consume the colon (':').
   local methodName = self:consumeIdentifier()
 
-  -- Convert the `table:method` part to an AST node
+  -- Convert the `table:method` part to an AST node.
   local methodIndexNode = {
     kind = "IndexExpression",
     base = currentExpression,
@@ -1309,7 +1331,7 @@ function Parser:consumeMethodCall(currentExpression)
     },
   }
 
-  -- Consume the function call and mark it as a method call
+  -- Consume the function call and mark it as a method call.
   return self:consumeFunctionCall(methodIndexNode, true)
 end
 
@@ -1349,7 +1371,7 @@ function Parser:parsePrimaryExpression()
 
     -- Anonymous function, e.g., `function(arg1) ... end`.
     elseif tokenValue == "function" then
-      self:consume(1) -- Consume 'function'
+      self:consume(1) -- Consume 'function'.
       local parameters, isVararg = self:consumeParameters()
       local body = self:parseCodeBlock(true, parameters)
       self:expectKeyword("end")
@@ -1399,14 +1421,18 @@ function Parser:parsePrefixExpression()
     local currentToken = self.currentToken
     if not currentToken then break end
 
-    local currentTokenKind = currentToken.TYPE
+    local currentTokenKind = currentToken.kind
+
+    -- Function call.
     if currentTokenKind == "LeftParen" then
       -- <expression>(<args>)
       primaryExpression = self:consumeFunctionCall(primaryExpression, false)
 
-      -- NOTE: In Lua, a function call may be considered ambiguous
-      -- without a semicolon, which will throw an error.
-      -- TLC does not enforce this as the Parser does not have line/column info.
+      -- NOTE: Lua's grammar can be ambiguous when a function call is
+      -- followed by a parenthesized expression. A semicolon is often
+      -- needed to prevent error. Our parser does not enforce this.
+
+    -- Table access.
     elseif currentTokenKind == "Dot" or currentTokenKind == "LeftBracket" then
       -- <expression>.<identifier> | <expression>[<expr>]
       primaryExpression = self:consumeIndexExpression(primaryExpression)
@@ -1457,7 +1483,9 @@ function Parser:parseBinaryExpression(minPrecedence)
   -- [<binary_operator> <binary>]
   while true do
     local operatorToken = self.currentToken
-    local precedence = operatorToken and self.CONFIG.PRECEDENCE[operatorToken.Value]
+    if not operatorToken then break end
+
+    local precedence = self.CONFIG.PRECEDENCE[operatorToken.value]
     if not self:isBinaryOperator() or precedence[1] <= minPrecedence then
       break
     end
