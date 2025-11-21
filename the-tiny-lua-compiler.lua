@@ -1959,7 +1959,7 @@ end
 
 --[[
     ============================================================================
-                                 (づ｡◕‿‿◕｡)づ
+                                (づ｡◕‿‿◕｡)づ
                             THE CODE GENERATOR!!!
     ============================================================================
 
@@ -3144,6 +3144,10 @@ function CodeGenerator:processFunction(functionNode, closureRegister)
   self:processFunctionBody(functionNode)
   self.proto = parentProto
 
+  -- Remove internal lookups, as they're no longer needed after codegen.
+  childProto.constantLookup = nil
+  childProto.upvalueLookup  = nil
+
   if closureRegister then
     self:generateClosure(childProto, closureRegister)
   end
@@ -3164,8 +3168,8 @@ end
 
 --[[
   ============================================================================
-                            (۶* ‘ヮ’)۶”
-                          !!!!!!!!THE BYTECODE EMITTER!!!!!!!!
+                                  (۶* ‘ヮ’)۶”
+                            THE BYTECODE EMITTER!
   ============================================================================
 
   The bytecode emitter is responsible for converting the given Lua Function Prototypes
@@ -3659,7 +3663,7 @@ end
 --[[
     ============================================================================
                                       (/^▽^)/
-                                   THE VIRTUAL MACHINE!
+                                THE VIRTUAL MACHINE!
     ============================================================================
 
     Welcome to the final stage of the pipeline!
