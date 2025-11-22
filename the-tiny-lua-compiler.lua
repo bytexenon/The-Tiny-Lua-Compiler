@@ -370,10 +370,10 @@ function Tokenizer:consumeUntilEndingDelimiter(depth)
     elseif self.curChar == "" then
       -- End of stream reached without finding the delimiter.
       error("Unexpected end of input while searching for ending delimiter")
+    else
+      -- Consume the current character and move to the next one in the stream.
+      self:consume(1)
     end
-
-    -- Consume the current character and move to the next one in the stream.
-    self:consume(1)
   end
 end
 
