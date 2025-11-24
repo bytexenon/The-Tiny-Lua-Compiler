@@ -2980,6 +2980,11 @@ function CodeGenerator:processRepeatStatement(node)
     self:processStatementList(body.statements)
     local conditionRegister = self:processExpressionNode(condition)
 
+    if self.currentScope.needClose then
+      self:emitInstruction("CLOSE", self.currentScope.parentScope.stackSize, 0, 0)
+      self.currentScope.needClose = false
+    end
+
     -- OP_TEST [A, C]    if not (R(A) <=> C) then pc++
     self:emitInstruction("TEST", conditionRegister, 0, 0)
     self:emitJumpBack(loopStartPC)
