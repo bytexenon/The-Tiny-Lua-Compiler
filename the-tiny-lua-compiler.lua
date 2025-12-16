@@ -2879,6 +2879,7 @@ function CodeGenerator:processForGenericStatement(node)
   local expressions = node.expressions
   local body        = node.body
 
+  self:enterScope()
   local baseRegister = self.stackSize
   local expressionRegisters = self:processExpressionList(expressions, 3)
   self:declareLocalVariables(iterators)
@@ -2897,8 +2898,7 @@ function CodeGenerator:processForGenericStatement(node)
     -- Emit jump back to the start of the loop if there are more values.
     self:emitJumpBack(loopStartPC)
   end)
-  self:undeclareVariables(iterators)
-  self:freeRegisters(#iterators + expressionRegisters)
+  self:leaveScope()
 end
 
 function CodeGenerator:processForNumericStatement(node)
@@ -2908,6 +2908,7 @@ function CodeGenerator:processForNumericStatement(node)
   local stepExpr  = node.step
   local body      = node.body
 
+  self:enterScope()
   local startRegister = self:processExpressionNode(startExpr)
   self:processExpressionNode(limitExpr)
   local stepRegister = self:allocateRegisters(1)
@@ -2935,8 +2936,7 @@ function CodeGenerator:processForNumericStatement(node)
     --                       if R(A) <?= R(A+1) then { pc+=sBx R(A+3)=R(A) }
     self:emitInstruction("FORLOOP", startRegister, loopStartPC - loopEndPC - 1)
   end)
-  self:freeRegisters(3) -- Free startRegister, endRegister, stepRegister
-  self:undeclareVariable(varName)
+  self:leaveScope()
 end
 
 function CodeGenerator:processWhileStatement(node)
