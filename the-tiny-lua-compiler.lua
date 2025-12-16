@@ -2423,11 +2423,16 @@ function CodeGenerator:splitTableElements(elements)
   return implicitElems, explicitElems
 end
 
--- Sets the value of a variable or table index from a register.
-function CodeGenerator:setRegisterValue(node, copyFromRegister)
+-- Sets the value of the list of variables or table indices from a range of registers.
+function CodeGenerator:assignValuesToRegisters(nodes, index, copyFromRegister)
+  if index > #nodes then return end
+  local node = nodes[index]
   local nodeKind = node.kind
 
   if nodeKind == "Variable" then
+    -- First give the other index assignments a chance to read the base and index before it might change.
+    self:assignValuesToRegisters(nodes, index + 1, copyFromRegister + 1)
+
     local variableType = node.variableType
     local variableName = node.name
     if variableType == "Local" then
@@ -2451,6 +2456,10 @@ function CodeGenerator:setRegisterValue(node, copyFromRegister)
     local baseRegister  = self:processConstantOrExpression(baseNode)
     local indexRegister = self:processConstantOrExpression(indexNode)
 
+    -- This index assignemnt did read it's base and index.
+    -- Now give other index assginments a chance before doing the assignment.
+    self:assignValuesToRegisters(nodes, index + 1, copyFromRegister + 1)
+
     -- OP_SETTABLE [A, B, C]    R(A)[RK(B)] := RK(C)
     self:emitInstruction("SETTABLE", baseRegister, indexRegister, copyFromRegister)
     self:freeIfRegister(baseRegister)
@@ -2460,6 +2469,12 @@ function CodeGenerator:setRegisterValue(node, copyFromRegister)
   end
 
   error("CodeGenerator: Unsupported lvalue kind in setRegisterValue: " .. nodeKind)
+end
+
+-- Sets the value of a variable or table index from a register.
+-- Unused, for compatibility
+function CodeGenerator:setRegisterValue(node, copyFromRegister)
+  self:assignValuesToRegisters({node}, 1, copyFromRegister)
 end
 
 -- Processes a single page (50 or less) of implicit table elements.
@@ -2808,32 +2823,14 @@ function CodeGenerator:processLocalFunctionDeclaration(node)
   self:processFunction(body, variableRegister)
 end
 
--- NOTE:
---   According to the Lua 5.1 assignment semantics, when there are variables
---   used in both sides of the assignment, the right-hand side expressions
---   should be evaluated first, and then assigned to the left-hand side
---   variables. This means that this code will incorrectly throw an error
---   if compiled with our current implementation:
---   ```lua
---   local a, b = {}, 2
---   a[b], b = 10, 20
---   assert(a[2] == 10 and b == 20)
---   ```
---   I haven't found an easy way to implement this behavior yet, so for now,
---   we will leave it as is.
---
---   Reference: https://www.lua.org/manual/5.1/manual.html#2.4.3
 function CodeGenerator:processAssignmentStatement(node)
   local lvalues     = node.lvalues
   local expressions = node.expressions
 
-  local variableBaseRegister = self.stackSize - 1
+  local variableBaseRegister = self.stackSize
   local lvalueRegisterCount  = self:processExpressionList(expressions, #lvalues)
 
-  for index, lvalue in ipairs(lvalues) do
-    local lvalueRegister = variableBaseRegister + index
-    self:setRegisterValue(lvalue, lvalueRegister)
-  end
+  self:assignValuesToRegisters(lvalues, 1, variableBaseRegister)
 
   self:freeRegisters(lvalueRegisterCount)
 end
@@ -2890,6 +2887,7 @@ function CodeGenerator:processForGenericStatement(node)
   local expressions = node.expressions
   local body        = node.body
 
+  self:enterScope()
   local baseRegister = self.stackSize
   local expressionRegisters = self:processExpressionList(expressions, 3)
   self:declareLocalVariables(iterators)
@@ -2908,8 +2906,7 @@ function CodeGenerator:processForGenericStatement(node)
     -- Emit jump back to the start of the loop if there are more values.
     self:emitJumpBack(loopStartPC)
   end)
-  self:undeclareVariables(iterators)
-  self:freeRegisters(#iterators + expressionRegisters)
+  self:leaveScope()
 end
 
 function CodeGenerator:processForNumericStatement(node)
@@ -2919,6 +2916,7 @@ function CodeGenerator:processForNumericStatement(node)
   local stepExpr  = node.step
   local body      = node.body
 
+  self:enterScope()
   local startRegister = self:processExpressionNode(startExpr)
   self:processExpressionNode(limitExpr)
   local stepRegister = self:allocateRegisters(1)
@@ -2946,8 +2944,7 @@ function CodeGenerator:processForNumericStatement(node)
     --                       if R(A) <?= R(A+1) then { pc+=sBx R(A+3)=R(A) }
     self:emitInstruction("FORLOOP", startRegister, loopStartPC - loopEndPC - 1)
   end)
-  self:freeRegisters(3) -- Free startRegister, endRegister, stepRegister
-  self:undeclareVariable(varName)
+  self:leaveScope()
 end
 
 function CodeGenerator:processWhileStatement(node)
@@ -3757,6 +3754,10 @@ function VirtualMachine:getLength(...)
   return select("#", ...)
 end
 
+local function pack(...)
+  return select("#", ...), { ... }
+end
+
 function VirtualMachine:pushClosure(closure)
   closure = {
     nupvalues = closure.nupvalues or 0,
@@ -3792,7 +3793,8 @@ function VirtualMachine:executeClosure(...)
   -- in our implementation, so in order to get the correct constant,
   -- we negate the index when accessing the constants table.
   local function rk(index)
-    return stack[index] or constants[-index]
+    if index < 0 then return constants[-index] end
+    return stack[index]
   end
 
   -- Initialize parameters.
@@ -3803,8 +3805,7 @@ function VirtualMachine:executeClosure(...)
     stack[paramIdx - 1] = params[paramIdx]
   end
   if isVararg then
-    vararg = { select(numparams + 1, ...) }
-    varargLen = self:getLength(unpack(vararg))
+    varargLen, vararg = pack(select(numparams + 1, ...))
     stack[numparams] = vararg -- Implicit "arg" argument.
   end
 
@@ -3945,13 +3946,11 @@ function VirtualMachine:executeClosure(...)
     -- OP_CONCAT [A, B, C]    R(A) := R(B).. ... ..R(C)
     -- Concatenate a range of registers and store the result in a register.
     elseif opcode == "CONCAT" then
-      local values = {}
-      for reg = b, c do
-        table.insert(values, stack[reg])
+      for reg = c - 1, b, -1 do
+        -- We cannot use table.concat as it does not call metamethods
+        stack[reg] = stack[reg] .. stack[reg + 1]
       end
-
-      -- Optimization: use table.concat for efficient string concatenation.
-      stack[a] = table.concat(values)
+      stack[a] = stack[b]
 
     -- OP_JMP [A, sBx]    pc+=sBx
     -- Jump to a new instruction offset.
@@ -4027,48 +4026,28 @@ function VirtualMachine:executeClosure(...)
     -- Call a closure (function) with arguments and handle returns.
     elseif opcode == "CALL" then
       local func = stack[a]
-      local args = {}
-      local nArgs
       if b ~= USE_CURRENT_TOP then
-        nArgs = b - 1
-        for index = 1, nArgs do
-          table.insert(args, stack[a + index])
-        end
-      else
-        nArgs = top - (a + 1)
-        for index = a + 1, top - 1 do
-          table.insert(args, stack[index])
-        end
+        top = a + b
       end
 
-      local returns = { func(unpack(args)) }
+      local nReturns, returns = pack(func(unpack(stack, a + 1, top - 1)))
 
       if c ~= USE_CURRENT_TOP then
-        for index = 0, c - 2 do
-          stack[a + index] = returns[index + 1]
-        end
+        nReturns = c - 1
       else
         -- Multi-return: push all results onto the stack.
-        local nReturns = self:getLength(unpack(returns))
         top = a + nReturns
-        for index = 1, nReturns do
-          stack[a + index - 1] = returns[index]
-        end
+      end
+      for index = 1, nReturns do
+        stack[a + index - 1] = returns[index]
       end
 
     -- OP_TAILCALL [A, B, C]    return R(A)(R(A+1), ... ,R(A+B-1))
     -- Perform a tail call to a closure (function).
     elseif opcode == "TAILCALL" then
       local func = stack[a]
-      local args = {}
       if b ~= USE_CURRENT_TOP then
-        for reg = a + 1, a + b - 1 do
-          table.insert(args, stack[reg])
-        end
-      else
-        for reg = a + 1, a + top do
-          table.insert(args, stack[reg])
-        end
+        top = a + b
       end
 
       -- Continuation of original implementation:
@@ -4085,23 +4064,16 @@ function VirtualMachine:executeClosure(...)
       --   Since TAILCALL always comes before RETURN,
       --   we can just return the function call results directly.
 
-      return func(unpack(args))
+      return func(unpack(stack, a + 1, top - 1))
 
     -- OP_RETURN [A, B]    return R(A), ... ,R(A+B-2)
     -- Return values from function call.
     elseif opcode == "RETURN" then
-      local returns = {}
-      if b == USE_CURRENT_TOP then
-        for reg = a, top do
-          table.insert(returns, stack[reg])
-        end
-      else
-        for reg = a, a + b - 2 do
-          table.insert(returns, stack[reg])
-        end
+      if b ~= USE_CURRENT_TOP then
+        top = a + b - 1
       end
 
-      return unpack(returns)
+      return unpack(stack, a, top - 1)
 
     -- OP_FORLOOP [A, sBx]   R(A)+=R(A+2)
     --                       if R(A) <?= R(A+1) then { pc+=sBx R(A+3)=R(A) }
@@ -4277,10 +4249,10 @@ function VirtualMachine:executeClosure(...)
       --  of code.
       stack[a] = function(...)
         self:pushClosure(tClosure)
-        local returns = { self:executeClosure(...) }
+        local nReturns, returns = pack(self:executeClosure(...))
         self:pushClosure(closure)
 
-        return unpack(returns)
+        return unpack(returns, 1, nReturns)
       end
 
     -- OP_VARARG [A, B]    R(A), R(A+1), ..., R(A+B-1) = vararg
