@@ -3358,35 +3358,41 @@ function BytecodeEmitter:lshift(value, shift)
 end
 
 -- RK (Register-or-Constant) encoding:
+--
 -- Lua packs a register index and a constant index into the same 9-bit operand.
 -- Values 0..255 refer to registers (stack[operand]).
 -- Values >= 256 refer to constants and map to proto.constants[operand - 256].
+--
 -- TLC represents constants as negative indices (e.g. -1 == first constant).
--- encodeRKValue converts TLC's negative constant index into the unsigned RK form
--- used in bytecode (for example: -1 -> 256).
+-- encodeRKValue converts TLC's negative constant index into the unsigned RK
+-- form used in bytecode (for example: -1 -> 256).
 function BytecodeEmitter:encodeRKValue(value)
   if value < 0 then
-    return 255 - value
+    return 255 - value -- Equivalent to: 255 + math.abs(value)
   end
   return value
 end
 
--- We use negative indices to represent constants internally,
--- so we need to convert them to unsigned indices for bytecode.
+-- We use negative indices to represent constants internally, so we need to
+-- convert them to unsigned indices for bytecode.
+--
 -- Example:
 --   LOADK     5, -4 --> LOADK     5, 3
 --   GETGLOBAL 2, -1 --> GETGLOBAL 2, 0
 function BytecodeEmitter:toUnsigned(value)
   if value < 0 then
-    return (-value) - 1
+    return -value - 1 -- Equivalent to: math.abs(value) - 1
   end
   return value
 end
 
 -- Converts `value` number into 1 byte (8 bits) representation.
 function BytecodeEmitter:encodeUint8(value)
-  if value < 0 or value > 255 then
-    error("BytecodeEmitter: encodeUint8 value out of range (0-255): " .. tostring(value))
+  if value < 0 or value > 2^8 - 1 then
+    error(
+"BytecodeEmitter: encodeUint8 value out of range of u8: "
+.. tostring(value)
+)
   end
 
   return string.char(value % 256)
@@ -3394,8 +3400,11 @@ end
 
 -- Converts `value` number into 4 bytes (32 bits) little-endian representation.
 function BytecodeEmitter:encodeUint32(value)
-  if value < 0 or value > 4294967295 then
-    error("BytecodeEmitter: encodeUint32 value out of range (0-4294967295): " .. tostring(value))
+  if value < 0 or value > 2^32 - 1 then
+    error(
+"BytecodeEmitter: encodeUint32 value out of range of u32: "
+.. tostring(value)
+)
   end
 
   local b1 = value % 256 value = math.floor(value / 256)
@@ -3408,8 +3417,11 @@ end
 
 -- Converts `value` number into 8 bytes (64 bits) little-endian representation.
 function BytecodeEmitter:encodeUint64(value)
-  if value < 0 or value > 18446744073709551615 then
-    error("BytecodeEmitter: encodeUint64 value out of range (0-18446744073709551615): " .. tostring(value))
+  if value < 0 or value > 2^64 - 1 then
+    error(
+"BytecodeEmitter: encodeUint64 value out of range of u64: "
+.. tostring(value)
+)
   end
 
   local lowWord  = value % 2^32
@@ -3435,7 +3447,13 @@ function BytecodeEmitter:encodeFloat64(value)
   elseif value ~= value then -- Check for NaN (Not a Number)
     -- The special representation for NaN is:
     --  exponent = all bits set to 1 (2047)
-    --  faction  = non-zero value (we'll use 1)
+    --  faction  = non-zero value for quiet NaN (we'll use 1)
+--
+    -- Fun fact: IEEE 754 defines two types of NaN:
+    --   - Quiet NaN (qNaN): The most significant bit of the fraction is set to 1.
+    --   - Signaling NaN (sNaN): The most significant bit of the fraction is set to 0.
+    --
+    -- Here, we are using a quiet NaN representation.
     local lowWord = 1
     local highWord = self:lshift(2047, 20) -- 0x7FF00000
     return self:encodeUint32(highWord) .. self:encodeUint32(lowWord)
@@ -3457,12 +3475,12 @@ function BytecodeEmitter:encodeFloat64(value)
   local integerMantissa = (mantissa * 2 - 1) * (2^52)
 
   -- The lower 32 bits are simply the lower 32 bits of our 52-bit mantissa.
-  -- We can get this with a modulo operation. 2^32 is 4294967296.
-  local lowWord = integerMantissa % 4294967296
+  -- We can get this with a modulo operation.
+  local lowWord = integerMantissa % 2^32
 
   -- The higher 32 bits are a combination of the sign, exponent, and the
   -- remaining 20 bits of the mantissa.
-  local mantissaHigh = math.floor(integerMantissa / 4294967296)
+  local mantissaHigh = math.floor(integerMantissa / 2^32)
 
   -- Now we use lshift to put everything in its place for the high word:
   --  - The sign bit is the 31st bit.
@@ -3544,8 +3562,8 @@ end
 -- Used for loading constants (LOADK) and global lookups (GETGLOBAL/SETGLOBAL).
 function BytecodeEmitter:encodeABxInstruction(opcode, a, instruction)
   -- Bx is an unsigned 18-bit integer.
-  -- Since we use negative indices for constants internally, we must convert them
-  -- using `toUnsigned`.
+  -- Since we use negative indices for constants internally,
+  -- we need to convert it to unsigned form.
   local instructionName = instruction[1]
   local bx = self:toUnsigned(instruction[3])
 
@@ -3609,7 +3627,8 @@ function BytecodeEmitter:encodeInstruction(instruction)
   end
 
   -- Unpack opcode data.
-  local opcode, opmode, arg1, arg2 = opcodeData[1], opcodeData[2], opcodeData[3], opcodeData[4]
+  local opcode, opmode     = opcodeData[1], opcodeData[2]
+  local argBMode, argCMode = opcodeData[3], opcodeData[4]
   local a = instruction[2]
 
   -- Validate operand A (8 bits unsigned: 0 to 255)
@@ -3617,14 +3636,18 @@ function BytecodeEmitter:encodeInstruction(instruction)
 
   -- Dispatch to the appropriate encoder based on the instruction mode.
   if opmode == MODE_iABC then
-    return self:encodeABCInstruction(opcode, a, instruction, arg1, arg2)
+    return self:encodeABCInstruction(opcode, a, instruction, argBMode, argCMode)
   elseif opmode == MODE_iABx then
     return self:encodeABxInstruction(opcode, a, instruction)
   elseif opmode == MODE_iAsBx then
     return self:encodeAsBxInstruction(opcode, a, instruction)
   end
 
-  error("BytecodeEmitter: Unsupported instruction format for '" .. instructionName .. "'")
+  error(
+"BytecodeEmitter: Unsupported instruction format for '"
+.. instructionName
+.. "'"
+)
 end
 
 -- Serializes the code section of a function prototype.
@@ -3657,11 +3680,9 @@ end
 -- Serializes a complete Lua Function Prototype chunk.
 function BytecodeEmitter:encodePrototype(proto)
   -- Basic validation of the function prototype.
-  if not proto.code or not proto.constants then error("BytecodeEmitter: Invalid function prototype")
-  elseif #proto.upvalues > 255    then error("BytecodeEmitter: Too many upvalues in function prototype (max 255)")
-  elseif proto.numParams > 255    then error("BytecodeEmitter: Too many parameters in function prototype (max 255)")
-  elseif proto.maxStackSize > 255 then error("BytecodeEmitter: Max stack size too large in function prototype (max 255)")
-  end
+  if not proto.code or not proto.constants then
+error("BytecodeEmitter: Invalid function prototype")
+    end
 
   return table.concat({
     -- Header --
