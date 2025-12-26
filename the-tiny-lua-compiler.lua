@@ -1983,17 +1983,13 @@ CodeGenerator.CONFIG = {
   MAX_REGISTERS  = 250,
 
   -- Maximum amount of elements for a single SETLIST instruction.
+-- If more elements are needed, multiple SETLIST instructions are emitted.
   SETLIST_MAX = 50,
 
   -- Node kinds that can return multiple values (multiret).
   -- These require special handling when they appear as the last element
   -- of a list (e.g., `return f()`).
   MULTIRET_NODES = createLookupTable({"FunctionCall", "VarargExpression"}),
-
-  -- Node kinds that be stored as constants in `proto.constants` table.
-  -- Instead of emitting an instruction to load a number every time,
-  -- we store it once in the constant pool and reference it by index.
-  CONSTANT_NODES = createLookupTable({"StringLiteral", "NumericLiteral"}),
 
   CONTROL_FLOW_OPERATOR_LOOKUP = createLookupTable({"and", "or"}),
   UNARY_OPERATOR_LOOKUP = {
@@ -2103,10 +2099,11 @@ function CodeGenerator:leaveScope()
 
   -- Check for register leaks when leaving a function scope.
   elseif currentScope.isFunction and self.stackSize ~= 0 then
-    -- Since all permanent registers are local variables, we can count
-    -- how many local variables are declared in this scope to determine
+    -- Since all permanent registers are local variables/arguments, we can
+    -- count how many local variables are declared in this scope to determine
     -- how many registers should be in use at most.
 
+-- Arguments are treated as local variables.
     local variableCount = 0
     for _ in pairs(currentScope.locals) do
       variableCount = variableCount + 1
@@ -2124,6 +2121,7 @@ function CodeGenerator:leaveScope()
     end
   end
 
+-- Remove the current scope from the stack.
   table.remove(scopes)
 
   local needClose = currentScope.needClose and not currentScope.isFunction
@@ -2132,7 +2130,11 @@ function CodeGenerator:leaveScope()
   self.stackSize = (currentScope and currentScope.stackSize) or 0
 
   if needClose then
-    if self.breakJumpPCs then self.breakJumpPCs.needClose = true end
+    if self.breakJumpPCs then
+self.breakJumpPCs.needClose = true
+end
+
+    -- OP_CLOSE [A]    close all variables in the stack up to (>=) R(A)
     self:emitInstruction("CLOSE", self.stackSize, 0, 0)
   end
 end
@@ -2293,7 +2295,9 @@ function CodeGenerator:findOrCreateUpvalue(varName)
 
   -- Cold path: New upvalue, add it to the table.
   table.insert(upvalues, varName)
-  upvalueIndex = #upvalues - 1 -- Upvalue indices are zero-based.
+
+  -- Lua upvalue indices are 0-based, so we subtract 1.
+  upvalueIndex = #upvalues - 1
   upvalueLookup[varName] = upvalueIndex
   return upvalueIndex
 end
@@ -2314,6 +2318,7 @@ function CodeGenerator:processConstantOrExpression(node, register)
     end
   end
 
+-- Otherwise, process it as an expression
   return self:processExpressionNode(node, register)
 end
 
@@ -2347,7 +2352,10 @@ end
 function CodeGenerator:patchJump(fromPC, toPC)
   local instruction = self.proto.code[fromPC]
   if not instruction then
-    error("CodeGenerator: Invalid 'fromPC' for jump patching: " .. tostring(fromPC))
+    error(
+"CodeGenerator: Invalid 'fromPC' for jump patching: "
+.. tostring(fromPC)
+)
   end
 
   local offset = toPC - (fromPC + 1)
@@ -2369,6 +2377,7 @@ function CodeGenerator:patchBreakJumpsToHere()
   if not self.breakJumpPCs then return end
   self:patchJumpsToHere(self.breakJumpPCs)
   if #self.breakJumpPCs > 0 and self.breakJumpPCs.needClose then
+-- OP_CLOSE [A]    close all variables in the stack up to (>=) R(A)
     self:emitInstruction("CLOSE", self.stackSize, 0, 0)
   end
   self.breakJumpPCs = nil
@@ -2426,11 +2435,12 @@ end
 -- Sets the value of the list of variables or table indices from a range of registers.
 function CodeGenerator:assignValuesToRegisters(nodes, index, copyFromRegister)
   if index > #nodes then return end
-  local node = nodes[index]
+  local node     = nodes[index]
   local nodeKind = node.kind
 
   if nodeKind == "Variable" then
-    -- First give the other index assignments a chance to read the base and index before it might change.
+    -- First give the other index assignments a chance
+    -- to read the base and index before it might change.
     self:assignValuesToRegisters(nodes, index + 1, copyFromRegister + 1)
 
     local variableType = node.variableType
@@ -2456,8 +2466,8 @@ function CodeGenerator:assignValuesToRegisters(nodes, index, copyFromRegister)
     local baseRegister  = self:processConstantOrExpression(baseNode)
     local indexRegister = self:processConstantOrExpression(indexNode)
 
-    -- This index assignemnt did read it's base and index.
-    -- Now give other index assginments a chance before doing the assignment.
+    -- This index assignment did read its base and index.
+    -- Now give other index assignments a chance before doing the assignment.
     self:assignValuesToRegisters(nodes, index + 1, copyFromRegister + 1)
 
     -- OP_SETTABLE [A, B, C]    R(A)[RK(B)] := RK(C)
@@ -2468,13 +2478,7 @@ function CodeGenerator:assignValuesToRegisters(nodes, index, copyFromRegister)
     return
   end
 
-  error("CodeGenerator: Unsupported lvalue kind in setRegisterValue: " .. nodeKind)
-end
-
--- Sets the value of a variable or table index from a register.
--- Unused, for compatibility
-function CodeGenerator:setRegisterValue(node, copyFromRegister)
-  self:assignValuesToRegisters({node}, 1, copyFromRegister)
+  error("CodeGenerator: Unsupported lvalue kind in assignValuesToRegisters: " .. nodeKind)
 end
 
 -- Processes a single page (50 or less) of implicit table elements.
@@ -2509,7 +2513,7 @@ function CodeGenerator:processTablePage(
 
   -- B = 0 means "take all values from stack top" (used for multiret).
   -- Otherwise, B is the number of elements to set.
-  local setListCount = isMultiret and 0 or elementCount
+  local setListCount = (isMultiret and 0) or elementCount
 
   -- OP_SETLIST [A, B, C]    R(A)[(C-1)*FPF+i] := R(A+i), 1 <= i <= B
   self:emitInstruction("SETLIST", register, setListCount, page)
@@ -2603,12 +2607,29 @@ function CodeGenerator:processBinaryOperator(node, register)
 
   -- String concatenation (..)
   elseif operator == ".." then
-    local leftRegister  = self:processExpressionNode(left)
-    local rightRegister = self:processExpressionNode(right)
+    local bottomRegister = self:processExpressionNode(left)
+    
+    -- Optimization: Flatten consecutive concatenations.
+    -- That will help us reduce the number of CONCAT instructions.
+    -- For example, the expression:
+    --  "Hello, " .. "world" .. "!"
+    -- Will be compiled into:
+    --  LOADK 0, -1     ; "Hello, "
+    --  LOADK 1, -2     ; "world"
+    --  LOADK 2, -3     ; "!"
+    --  CONCAT 3, 0, 2  ; R(3) = R(0) .. R(1) .. R(2)
+    local curRight = right
+    while curRight.operator == ".." do
+      -- The expression is guaranteed to take only one register.
+      self:processExpressionNode(curRight.left)
+      curRight = curRight.right -- Advance to the next right node.
+    end
+
+    local topRegister = self:processExpressionNode(curRight)
 
     -- OP_CONCAT [A, B, C]    R(A) := R(B).. ... ..R(C)
-    self:emitInstruction("CONCAT", register, leftRegister, rightRegister)
-    self:freeRegisters(2)
+    self:emitInstruction("CONCAT", register, bottomRegister, topRegister)
+    self:freeRegisters(topRegister - bottomRegister + 1)
 
     return register
   end
@@ -2657,7 +2678,7 @@ function CodeGenerator:processTableConstructor(node, register)
   local totalPages = math.ceil(#implicitElems / self.CONFIG.SETLIST_MAX)
 
   -- Table page limit in SETLIST instructions.
-  -- The C operand is 9 bits, limiting it to 511 (0-510 valid range).
+  -- The C operand is 9 bits, limiting it to 511 (1-511 valid range).
   -- This caps table constructors at 511 * SETLIST_MAX elements (25550 with SETLIST_MAX=50).
   -- Official Lua 5.1 handles overflows by setting C=0 and encoding the page count
   -- in the next pseudo-instruction. TLC errors out instead for simplicity.
@@ -2683,7 +2704,7 @@ function CodeGenerator:processVariable(node, register)
   local varType = node.variableType -- "Local" / "Upvalue" / "Global"
 
   if varType == "Local" then
-    -- Local variables are stored in the function's stack (registers).
+    -- Local variables are stored in the closure's stack (registers).
     local variable = self:findVariableRegister(varName)
 
     -- OP_MOVE [A, B]    R(A) := R(B)
@@ -2889,7 +2910,7 @@ function CodeGenerator:processForGenericStatement(node)
 
   self:enterScope()
   local baseRegister = self.stackSize
-  local expressionRegisters = self:processExpressionList(expressions, 3)
+  self:processExpressionList(expressions, 3)
   self:declareLocalVariables(iterators)
 
   local startJmpInstruction = self:emitJump()
@@ -2933,6 +2954,8 @@ function CodeGenerator:processForNumericStatement(node)
   -- OP_FORPREP [A, sBx]    R(A)-=R(A+2) pc+=sBx
   local forPrepInstruction = self:emitInstruction("FORPREP", startRegister, 0)
   local loopStartPC = #self.proto.code
+
+  -- Declare the loop variable.
   self:declareLocalVariable(varName, startRegister)
   self:breakable(function()
     self:processBlockNode(body)
@@ -2978,6 +3001,7 @@ function CodeGenerator:processRepeatStatement(node)
     local conditionRegister = self:processExpressionNode(condition)
 
     if self.currentScope.needClose then
+-- OP_CLOSE [A]    close all variables in the stack up to (>=) R(A)
       self:emitInstruction("CLOSE", self.currentScope.parentScope.stackSize, 0, 0)
       self.currentScope.needClose = false
     end
@@ -3164,7 +3188,10 @@ function CodeGenerator:generateClosure(proto, closureRegister)
       -- OP_GETUPVAL [A, B]    R(A) := UpValue[B]
       self:emitInstruction("GETUPVAL", 0, self:findOrCreateUpvalue(upvalueName))
     else -- Assume it's a global.
-      error("CodeGenerator: Possible parser error, the upvalue cannot be a global: " .. upvalueName)
+      error(
+"CodeGenerator: The upvalue cannot be a global: "
+.. upvalueName
+)
     end
   end
 end
@@ -3200,7 +3227,7 @@ function CodeGenerator:generate()
   return self:processFunction({
     body       = self.ast.body,
     parameters = {},
-    isVararg   = true -- The main chunk is always vararg.
+    isVararg   = true -- The main chunk always accepts varargs.
                       -- (used for command-line arguments)
   })
 end
