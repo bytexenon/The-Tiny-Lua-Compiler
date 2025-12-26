@@ -17,11 +17,11 @@
 --]]
 
 --* Imports *--
-local tlc = require("./../the-tiny-lua-compiler")
+local tlc = require("./../tlc")
 
 -- Constants --
 local ITERATIONS = 500
-local TLC_CODE   = io.open("./the-tiny-lua-compiler.lua", "r"):read("*a")
+local TLC_CODE   = io.open("./tlc.lua", "r"):read("*a")
 
 --* Functions *--
 local function benchmark_tokenizer(code)

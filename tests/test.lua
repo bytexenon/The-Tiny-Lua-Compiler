@@ -1,5 +1,5 @@
 --* Dependencies *--
-local tlc = require("the-tiny-lua-compiler")
+local tlc = require("tlc")
 
 --* Constants *--
 
@@ -826,7 +826,7 @@ suite:describe("Complex General Tests", function()
   suite:it("Self-compilation", function()
     -- NOTE: This test might take a while to run.
     local testCode = [[
-      local tlcSource = io.open("the-tiny-lua-compiler.lua"):read("*a")
+      local tlcSource = io.open("tlc.lua"):read("*a")
 
       local tlc  = suite:compileAndRun(tlcSource)
       local code = "return 2 * 10 + (function() return 2 * 5 end)()"
