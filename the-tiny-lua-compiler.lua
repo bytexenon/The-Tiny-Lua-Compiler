@@ -3817,28 +3817,28 @@ function VirtualMachine:executeClosure(...)
       break
     end
 
-    local opcode, a, b, c = instruction[1], instruction[2], instruction[3], instruction[4]
+    local opname = instruction[1]
+    local a, b, c = instruction[2], instruction[3], instruction[4]
 
     -- NOTE:
     --  Many Lua VM implementations written in Lua use binary search on sorted
     --  opcode tables for faster dispatch, reducing lookup time from O(n) to
     --  O(log n). For clarity and maintainability, TLC uses a simple linear
-    --  if-else chain instead. This makes the code easier to read and modify,
-    --  prioritizing education over speed.
+    --  if-else chain instead. This makes the code easier to read and modify.
 
     -- OP_MOVE [A, B]    R(A) := R(B)
     -- Copy a value between registers.
-    if opcode == "MOVE" then
+    if opname == "MOVE" then
       stack[a] = stack[b]
 
     -- OP_LOADK [A, Bx]    R(A) = Kst(Bx)
     -- Load a constant into a register.
-    elseif opcode == "LOADK" then
+    elseif opname == "LOADK" then
       stack[a] = constants[-b]
 
     -- OP_LOADBOOL [A, B, C]    R(A) := (Bool)B; if (C) pc++
     -- Load a boolean into a register.
-    elseif opcode == "LOADBOOL" then
+    elseif opname == "LOADBOOL" then
       stack[a] = (b == 1)
       if c == 1 then
         pc = pc + 1
@@ -3846,7 +3846,7 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_LOADNIL [A, B]    R(A) := ... := R(B) := nil
     -- Load nil values into a range of registers.
-    elseif opcode == "LOADNIL" then
+    elseif opname == "LOADNIL" then
       local reg = b
       repeat
         stack[reg] = nil
@@ -3855,97 +3855,97 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_GETUPVAL [A, B]    R(A) := UpValue[B]
     -- Read an upvalue into a register.
-    elseif opcode == "GETUPVAL" then
+    elseif opname == "GETUPVAL" then
       local upvalue = upvalues[b + 1]
       stack[a] = upvalue.stack[upvalue.index]
 
     -- OP_GETGLOBAL [A, Bx]    R(A) := Gbl[Kst(Bx)]
     -- Read a global variable into a register.
-    elseif opcode == "GETGLOBAL" then
+    elseif opname == "GETGLOBAL" then
       stack[a] = env[constants[-b]]
 
     -- OP_GETTABLE [A, B, C]    R(A) := R(B)[RK(C)]
     -- Read a table element into a register.
-    elseif opcode == "GETTABLE" then
+    elseif opname == "GETTABLE" then
       stack[a] = stack[b][rk(c)]
 
     -- OP_SETGLOBAL [A, Bx]    Gbl[Kst(Bx)] := R(A)
     -- Write a register value into a global variable.
-    elseif opcode == "SETGLOBAL" then
+    elseif opname == "SETGLOBAL" then
       env[rk(b)] = stack[a]
 
     -- OP_SETUPVAL [A, B]    UpValue[B] := R(A)
     -- Write a register value into an upvalue.
-    elseif opcode == "SETUPVAL" then
+    elseif opname == "SETUPVAL" then
       local upvalue = upvalues[b + 1]
       upvalue.stack[upvalue.index] = stack[a]
 
     -- OP_SETTABLE [A, B, C]    R(A)[RK(B)] := RK(C)
     -- Write a register value into a table element.
-    elseif opcode == "SETTABLE" then
+    elseif opname == "SETTABLE" then
       stack[a][rk(b)] = rk(c)
 
     -- OP_NEWTABLE [A, B, C]    R(A) := {} (size = B,C)
     -- Create a new table and store it in a register.
     -- B = array part size hint, C = hash part size hint (ignored here).
-    elseif opcode == "NEWTABLE" then
+    elseif opname == "NEWTABLE" then
       stack[a] = {}
 
     -- OP_SELF [A, B, C]    R(A+1) := R(B); R(A) := R(B)[RK(C)]
     -- Prepare an object method for calling.
-    elseif opcode == "SELF" then
+    elseif opname == "SELF" then
       local rb = stack[b]
       stack[a + 1] = rb
       stack[a] = rb[rk(c)]
 
     -- OP_ADD [A, B, C]    R(A) := RK(B) + RK(C)
     -- Add two values and store the result in a register.
-    elseif opcode == "ADD" then
+    elseif opname == "ADD" then
       stack[a] = rk(b) + rk(c)
 
     -- OP_SUB [A, B, C]    R(A) := RK(B) - RK(C)
     -- Subtract two values and store the result in a register.
-    elseif opcode == "SUB" then
+    elseif opname == "SUB" then
       stack[a] = rk(b) - rk(c)
 
     -- OP_MUL [A, B, C]    R(A) := RK(B) * RK(C)
     -- Multiply two values and store the result in a register.
-    elseif opcode == "MUL" then
+    elseif opname == "MUL" then
       stack[a] = rk(b) * rk(c)
 
     -- OP_DIV [A, B, C]    R(A) := RK(B) / RK(C)
     -- Divide two values and store the result in a register.
-    elseif opcode == "DIV" then
+    elseif opname == "DIV" then
       stack[a] = rk(b) / rk(c)
 
     -- OP_MOD [A, B, C]    R(A) := RK(B) % RK(C)
     -- Calculate the modulus of two values and store the result in a register.
-    elseif opcode == "MOD" then
+    elseif opname == "MOD" then
       stack[a] = rk(b) % rk(c)
 
     -- OP_POW [A, B, C]    R(A) := RK(B) ^ RK(C)
     -- Raise a value to the power of another and store the result in a register.
-    elseif opcode == "POW" then
+    elseif opname == "POW" then
       stack[a] = rk(b) ^ rk(c)
 
     -- OP_UNM [A, B]    R(A) := -R(B)
     -- Negate a value and store the result in a register.
-    elseif opcode == "UNM" then
+    elseif opname == "UNM" then
       stack[a] = -stack[b]
 
     -- OP_NOT [A, B]    R(A) := not R(B)
     -- Logical NOT of a value and store the result in a register.
-    elseif opcode == "NOT" then
+    elseif opname == "NOT" then
       stack[a] = not stack[b]
 
     -- OP_LEN [A, B]    R(A) := length of R(B)
     -- Get the length of a value and store it in a register.
-    elseif opcode == "LEN" then
+    elseif opname == "LEN" then
       stack[a] = #stack[b]
 
     -- OP_CONCAT [A, B, C]    R(A) := R(B).. ... ..R(C)
     -- Concatenate a range of registers and store the result in a register.
-    elseif opcode == "CONCAT" then
+    elseif opname == "CONCAT" then
       for reg = c - 1, b, -1 do
         -- We cannot use table.concat as it does not call metamethods
         stack[reg] = stack[reg] .. stack[reg + 1]
@@ -3954,12 +3954,12 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_JMP [A, sBx]    pc+=sBx
     -- Jump to a new instruction offset.
-    elseif opcode == "JMP" then
+    elseif opname == "JMP" then
       pc = pc + b
 
     -- OP_EQ [A, B, C]    if ((RK(B) == RK(C)) ~= A) then pc++
     -- Conditional jump based on equality.
-    elseif opcode == "EQ" then
+    elseif opname == "EQ" then
       local isEqual = rk(b) == rk(c)
       local bool = (a == 1)
       if isEqual ~= bool then
@@ -3968,7 +3968,7 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_LT [A, B, C]    if ((RK(B) < RK(C)) ~= A) then pc++
     -- Conditional jump based on less-than comparison.
-    elseif opcode == "LT" then
+    elseif opname == "LT" then
       local isLessThan = rk(b) < rk(c)
       local bool = (a == 1)
       if isLessThan ~= bool then
@@ -3977,7 +3977,7 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_LE [A, B, C]    if ((RK(B) <= RK(C)) ~= A) then pc++
     -- Conditional jump based on less-than-or-equal comparison.
-    elseif opcode == "LE" then
+    elseif opname == "LE" then
       local isLessThanOrEqual = rk(b) <= rk(c)
       local bool = (a == 1)
       if isLessThanOrEqual ~= bool then
@@ -3987,7 +3987,7 @@ function VirtualMachine:executeClosure(...)
     -- OP_TEST [A, C]    if not (R(A) <=> C) then pc++
     -- Boolean test, with a conditional jump.
     -- NOTE: After this instruction, the next instruction will always be a jump.
-    elseif opcode == "TEST" then
+    elseif opname == "TEST" then
       local bool = (c == 1)
       if (not stack[a]) == bool then
         pc = pc + 1
@@ -4005,7 +4005,7 @@ function VirtualMachine:executeClosure(...)
     -- OP_TESTSET [A, B, C]    if (R(B) <=> C) then R(A) := R(B) else pc++
     -- Boolean test, with conditional assignment and jump.
     -- NOTE: After this instruction, the next instruction will always be a jump.
-    elseif opcode == "TESTSET" then
+    elseif opname == "TESTSET" then
       local bool = (c == 1)
       if (not stack[a]) == bool then
         stack[a] = stack[b]
@@ -4024,7 +4024,7 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_CALL [A, B, C]    R(A), ... ,R(A+C-2) := R(A)(R(A+1), ... ,R(A+B-1))
     -- Call a closure (function) with arguments and handle returns.
-    elseif opcode == "CALL" then
+    elseif opname == "CALL" then
       local func = stack[a]
       if b ~= USE_CURRENT_TOP then
         top = a + b
@@ -4044,7 +4044,7 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_TAILCALL [A, B, C]    return R(A)(R(A+1), ... ,R(A+B-1))
     -- Perform a tail call to a closure (function).
-    elseif opcode == "TAILCALL" then
+    elseif opname == "TAILCALL" then
       local func = stack[a]
       if b ~= USE_CURRENT_TOP then
         top = a + b
@@ -4068,7 +4068,7 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_RETURN [A, B]    return R(A), ... ,R(A+B-2)
     -- Return values from function call.
-    elseif opcode == "RETURN" then
+    elseif opname == "RETURN" then
       if b ~= USE_CURRENT_TOP then
         top = a + b - 1
       end
@@ -4078,7 +4078,7 @@ function VirtualMachine:executeClosure(...)
     -- OP_FORLOOP [A, sBx]   R(A)+=R(A+2)
     --                       if R(A) <?= R(A+1) then { pc+=sBx R(A+3)=R(A) }
     -- Iterate a numeric for loop.
-    elseif opcode == "FORLOOP" then
+    elseif opname == "FORLOOP" then
       local step  = stack[a + 2]
       local idx   = stack[a] + step
       local limit = stack[a + 1]
@@ -4098,7 +4098,7 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_FORPREP [A, sBx]    R(A)-=R(A+2) pc+=sBx
     -- Initialize a numeric for loop.
-    elseif opcode == "FORPREP" then
+    elseif opname == "FORPREP" then
       local init   = stack[a]
       local plimit = stack[a + 1]
       local pstep  = stack[a + 2]
@@ -4117,7 +4117,7 @@ function VirtualMachine:executeClosure(...)
     --                       if R(A+3) ~= nil then R(A+2)=R(A+3) else pc++
     -- Iterate a generic for loop.
     -- NOTE: After this instruction, the next instruction will always be a jump.
-    elseif opcode == "TFORLOOP" then
+    elseif opname == "TFORLOOP" then
       local cb = a + 3
 
       -- Copy function and arguments for the call.
@@ -4156,7 +4156,7 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_SETLIST [A, B, C]    R(A)[(C-1)*FPF+i] := R(A+i), 1 <= i <= B
     -- Set a range of array elements in a table.
-    elseif opcode == "SETLIST" then
+    elseif opname == "SETLIST" then
       local targetTable = stack[a]
       if type(targetTable) ~= "table" then
         error("SETLIST target is not a table")
@@ -4178,8 +4178,8 @@ function VirtualMachine:executeClosure(...)
         targetTable[offset + i] = stack[a + i]
       end
 
-    -- OP_VARARG [A]    close all variables in the stack up to (>=) R(A)
-    elseif opcode == "CLOSE" then
+    -- OP_CLOSE [A]    close all variables in the stack up to (>=) R(A)
+    elseif opname == "CLOSE" then
       for i = a, maxUpvalue do
         local uv = upvalueStack[i]
         if uv then
@@ -4192,7 +4192,7 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_CLOSURE [A, Bx]    R(A) := closure(KPROTO[Bx], R(A), ... ,R(A+n))
     -- Create a new closure (function) and store it in a register.
-    elseif opcode == "CLOSURE" then
+    elseif opname == "CLOSURE" then
       local tProto = proto.protos[b + 1]
       local tProtoUpvalues = {}
 
@@ -4203,21 +4203,26 @@ function VirtualMachine:executeClosure(...)
         pc = pc + 1
 
         local pseudoInstruction = code[pc]
-        local opname = pseudoInstruction[1]
+        local nextOpname = pseudoInstruction[1]
         local index = pseudoInstruction[3]
-        if opname == "MOVE" then
+        if nextOpname == "MOVE" then
           local upvalue = upvalueStack[index] or {
             index = index,
             stack = stack,
           }
           upvalueStack[index] = upvalue
-          if index > maxUpvalue then maxUpvalue = index end
+          if index > maxUpvalue then
+maxUpvalue = index
+end
           table.insert(tProtoUpvalues, upvalue)
-        elseif opname == "GETUPVAL" then
+        elseif nextOpname == "GETUPVAL" then
           local upvalue = upvalues[index + 1]
           table.insert(tProtoUpvalues, upvalue)
         else
-          error("Unexpected instruction while capturing upvalues: " .. tostring(opname))
+          error(
+"Unexpected instruction while capturing upvalues: "
+.. tostring(nextOpname)
+)
         end
       end
 
@@ -4257,19 +4262,18 @@ function VirtualMachine:executeClosure(...)
 
     -- OP_VARARG [A, B]    R(A), R(A+1), ..., R(A+B-1) = vararg
     -- Load vararg function arguments into registers.
-    elseif opcode == "VARARG" then
+    elseif opname == "VARARG" then
+local upperBound = b - 1
       if b == USE_CURRENT_TOP then
         top = a + varargLen
-        for i = 1, varargLen do
-          stack[a + i - 1] = vararg[i]
+        upperBound = top
         end
-      else
-        for i = 1, b - 1 do
+      
+        for i = 1, upperBound do
           stack[a + i - 1] = vararg[i]
-        end
-      end
+              end
     else
-      error("Unimplemented instruction: " .. tostring(opcode))
+      error("Unimplemented instruction: " .. tostring(opname))
     end
 
     -- Advance to the next instruction.
