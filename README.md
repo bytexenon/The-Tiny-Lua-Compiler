@@ -96,7 +96,7 @@ Because TLC is designed to fit in a single file and be easily understood, we dec
 
 - **Debug Symbols:** We don't strip line numbers or debug info, we never generate them! This drastically simplifies the Tokenizer and Parser.
 - **[Constant Folding](https://en.wikipedia.org/wiki/Constant_folding):** Standard Lua converts `local x = 2 + 3` into `local x = 5` at compile time. TLC calculates this at runtime.
-- **Unused Opcodes:** We skip `CLOSE` (which may break some code relying on it), `TESTSET` (it's just an optimization), and massive table constructors (over ~25k items).
+- **Unused Opcodes:** We skip `TESTSET` (it's just an optimization), and massive table constructors (over ~25k items).
 
 Everything else should work just like standard Lua 5.1!
 
