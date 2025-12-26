@@ -1531,7 +1531,8 @@ function Parser:parseLocalStatement()
   -- local function <ident>(<params>) <body> end
   self:consumeToken("Keyword", "local")
 
-  -- function <ident>(<params>) <body> end
+  -- Check if it's a local function declaration.
+  -- local function <ident>(<params>) <body> end
   if self:checkKeyword("function") then
     self:consumeToken("Keyword", "function")
     local functionName = self:consumeIdentifier()
@@ -1539,6 +1540,15 @@ function Parser:parseLocalStatement()
     self:declareLocalVariable(functionName)
     local body = self:parseCodeBlock(true, parameters)
     self:expectKeyword("end")
+
+    -- Unlike non-local function declarations (which desugar to assignments),
+    -- local function declarations require special handling to support recursion.
+    -- Consider: `local function foo() return foo() end`
+    -- If we naively translated this to `local foo = function() return foo() end`,
+    -- the inner `foo` would reference the global `foo` instead of the local one.
+    -- The correct desugaring is: `local foo; foo = function() return foo() end`,
+    -- but since our parser returns a single AST node per statement, we represent
+    -- local function declarations as a dedicated node type.
     return { kind = "LocalFunctionDeclaration",
       name = functionName,
       body = {
@@ -1549,6 +1559,7 @@ function Parser:parseLocalStatement()
       }
     }
   else
+-- It's a regular local variable declaration.
     -- <ident_list> [= <expr_list>]
     local variables = self:consumeIdentifierList()
     local initializers = {}
@@ -1641,7 +1652,7 @@ function Parser:parseIfStatement()
   self:consumeToken("Keyword", "then")
   local ifBody = self:parseCodeBlock()
   local clauses = {
-    -- First branch: the initial "if"
+    -- First clause: the initial "if"
     { kind = "IfClause",
       condition = ifCondition,
       body      = ifBody
@@ -1688,7 +1699,7 @@ function Parser:parseForStatement()
   -- (e.g., `for i, v in pairs(t)`) and a numeric `for` loop `(e.g., `for i = 1, 10`).
   -- The presence of a comma or the `in` keyword signals a generic loop.
   if self:checkTokenKind("Comma") or self:checkKeyword("in") then
-    -- It's a generic 'for' loop: `for var1, var2, ... in expr1, expr2, ... do ... end`.
+    -- It's a generic 'for' loop.
     -- Even though the generic for loop allows infinite expressions after `in`,
     -- the Lua VM only uses the first three (the generator, state, and control).
 
@@ -1787,11 +1798,10 @@ function Parser:parseFunctionDeclaration()
   local body = self:parseCodeBlock(true, parameters)
   self:expectKeyword("end")
 
-  -- Instead of having a separate node kind for non-local function declarations,
-  -- we use a "AssignmentStatement" node that assigns a "Function" node to a variable or table index.
-  -- Behaviorally, `function <name>[.<field>]*[:<method>](<params>) <body> end` is equivalent to
-  -- `<name>[.<field>]*[.method] = function([self,] <params>) <body> end`.
-  -- This will make the code generator much smaller and simpler.
+  -- Non-local function declarations desugar to assignment statements.
+  -- Behaviorally, `function f() end` is equivalent to `f = function() end`.
+  -- This uniform representation simplifies code generation by eliminating
+  -- the need for a separate FunctionDeclaration node handler.
   return {
     kind    = "AssignmentStatement",
     lvalues = { expression },
