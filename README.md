@@ -1,6 +1,6 @@
 <div align="center">
 
-![Tiny Lua Compiler (TLC)](https://github.com/ByteXenon/TinyLua/assets/125568681/41cf5285-e31d-4b27-a8a8-ee83a7300f1f)
+![Tiny Lua Compiler (TLC)](https://github.com/bytexenon/Tiny-Lua-Compiler/assets/125568681/41cf5285-e31d-4b27-a8a8-ee83a7300f1f)
 
 **A minimal, educational Lua 5.1 compiler written in pure Lua**
 
@@ -17,7 +17,7 @@ _Inspired by [Jamie Kyle's The Super Tiny Compiler](https://github.com/jamiebuil
 - **Speed**: While education is the priority, the tokenizer uses optimized lookups and the compiler is designed efficiently, making it quite fast for a compiler written in a high-level language.
 - **Tests**: Includes a comprehensive test suite with nearly 100% coverage, ensuring the compiler is as reliable as it is educational.
 
-### [Want to jump into the code? Click here](https://github.com/bytexenon/The-Tiny-Lua-Compiler/blob/main/tlc.lua)
+### [Want to jump into the code? Click here](https://github.com/bytexenon/Tiny-Lua-Compiler/blob/main/tlc.lua)
 
 ---
 
@@ -88,7 +88,7 @@ tlc.VirtualMachine.new(proto):execute()
 
 ### Okay so where do I begin?
 
-Awesome! Head on over to the [tlc.lua](https://github.com/bytexenon/The-Tiny-Lua-Compiler/blob/main/tlc.lua) file.
+Awesome! Head on over to the [tlc.lua](https://github.com/bytexenon/Tiny-Lua-Compiler/blob/main/tlc.lua) file.
 
 ### What isn't covered? (Non-Goals)
 
